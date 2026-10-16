@@ -1,0 +1,122 @@
+@startuml food-delivery
+' Fixture: a busy use case diagram. Many actors share use cases across
+' boundaries, so default layout produces long crossing lines.
+left to right direction
+skinparam packageStyle rectangle
+
+actor Customer
+actor "Guest" as Guest
+actor "Registered Customer" as Member
+actor Courier
+actor "Restaurant Staff" as Staff
+actor "Restaurant Owner" as Owner
+actor "Support Agent" as Support
+actor Admin
+actor "Payment Gateway" as PSP <<system>>
+actor "Maps Service" as Maps <<system>>
+
+Guest --|> Customer
+Member --|> Customer
+Owner --|> Staff
+
+rectangle "Food Delivery Platform" as Platform {
+
+  package "Ordering" as Ordering {
+    usecase "Browse Restaurants" as UC_Browse
+    usecase "Search Menu" as UC_Search
+    usecase "Place Order" as UC_Order
+    usecase "Apply Promo Code" as UC_Promo
+    usecase "Pay for Order" as UC_Pay
+    usecase "Track Order" as UC_Track
+    usecase "Cancel Order" as UC_Cancel
+    usecase "Rate Order" as UC_Rate
+  }
+
+  package "Accounts" as Accounts {
+    usecase "Sign Up" as UC_SignUp
+    usecase "Log In" as UC_Login
+    usecase "Manage Addresses" as UC_Addresses
+    usecase "Verify Identity" as UC_Verify
+  }
+
+  package "Fulfilment" as Fulfilment {
+    usecase "Accept Order" as UC_Accept
+    usecase "Prepare Order" as UC_Prepare
+    usecase "Assign Courier" as UC_Assign
+    usecase "Pick Up Order" as UC_PickUp
+    usecase "Deliver Order" as UC_Deliver
+    usecase "Calculate Route" as UC_Route
+  }
+
+  package "Back Office" as BackOffice {
+    usecase "Manage Menu" as UC_Menu
+    usecase "View Payouts" as UC_Payouts
+    usecase "Issue Refund" as UC_Refund
+    usecase "Resolve Dispute" as UC_Dispute
+    usecase "Moderate Reviews" as UC_Moderate
+    usecase "Onboard Restaurant" as UC_Onboard
+  }
+}
+
+' --- Customers
+Customer --> UC_Browse
+Customer --> UC_Search
+Customer --> UC_Track
+Guest --> UC_SignUp
+Member --> UC_Login
+Member --> UC_Order
+Member --> UC_Addresses
+Member --> UC_Cancel
+Member --> UC_Rate
+
+' --- Ordering internals
+UC_Order ..> UC_Pay : <<include>>
+UC_Order ..> UC_Login : <<include>>
+UC_Promo ..> UC_Order : <<extend>>
+UC_Cancel ..> UC_Refund : <<include>>
+UC_Search ..> UC_Browse : <<extend>>
+UC_SignUp ..> UC_Verify : <<include>>
+UC_Track ..> UC_Route : <<include>>
+
+' --- Restaurant side
+Staff --> UC_Accept
+Staff --> UC_Prepare
+Owner --> UC_Menu
+Owner --> UC_Payouts
+UC_Accept ..> UC_Assign : <<include>>
+
+' --- Courier
+Courier --> UC_PickUp
+Courier --> UC_Deliver
+Courier --> UC_Login
+Courier --> UC_Verify
+UC_Deliver ..> UC_Route : <<include>>
+UC_Assign ..> UC_Route : <<include>>
+
+' --- Support / admin
+Support --> UC_Dispute
+Support --> UC_Refund
+Support --> UC_Track
+Admin --> UC_Onboard
+Admin --> UC_Moderate
+Admin --> UC_Dispute
+UC_Dispute ..> UC_Refund : <<extend>>
+UC_Onboard ..> UC_Verify : <<include>>
+
+' --- External systems (the lines that cross everything)
+UC_Pay --> PSP
+UC_Refund --> PSP
+UC_Payouts --> PSP
+UC_Route --> Maps
+UC_Assign --> Maps
+
+note right of UC_Assign
+  Nearest available courier,
+  re-assigned after 90 s
+  without acceptance.
+end note
+
+note "Partial refunds allowed\nwithin 24 h of delivery" as N_Refund
+N_Refund .. UC_Refund
+
+@enduml
