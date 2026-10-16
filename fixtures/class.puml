@@ -1,0 +1,72 @@
+@startuml class
+' Online shop domain model
+package "Catalog" as Catalog {
+  abstract class Product {
+    -id : UUID
+    -name : String
+    -price : Money
+    +isAvailable() : boolean
+    {abstract} +shippingWeight() : Weight
+  }
+  class PhysicalProduct {
+    -weight : Weight
+    +shippingWeight() : Weight
+  }
+  class DigitalProduct {
+    -downloadUrl : URL
+    +shippingWeight() : Weight
+  }
+  class Category {
+    -name : String
+  }
+}
+
+package "Ordering" as Ordering {
+  class Order {
+    -id : UUID
+    -placedAt : Instant
+    +total() : Money
+    +cancel()
+  }
+  class OrderLine {
+    -quantity : int
+    +subtotal() : Money
+  }
+  enum OrderStatus {
+    PENDING
+    PAID
+    SHIPPED
+    DELIVERED
+    CANCELLED
+  }
+}
+
+package "Payments" as Payments {
+  interface PaymentGateway {
+    +charge(order : Order) : Receipt
+    +refund(receipt : Receipt)
+  }
+  class StripeGateway
+  class PayPalGateway
+  class Receipt
+}
+
+class Customer {
+  -email : Email
+  +orders() : List<Order>
+}
+class Money <<value object>>
+
+Product <|-- PhysicalProduct
+Product <|-- DigitalProduct
+Category "1" o-- "*" Product : contains
+Customer "1" -- "*" Order : places >
+Order "1" *-- "1..*" OrderLine
+OrderLine "*" --> "1" Product
+Order --> OrderStatus
+PaymentGateway <|.. StripeGateway
+PaymentGateway <|.. PayPalGateway
+PaymentGateway ..> Receipt : creates
+Order ..> PaymentGateway : pays via
+Product --> Money
+@enduml

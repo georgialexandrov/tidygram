@@ -1,0 +1,18 @@
+@startmindmap mindmap
+* Launch plan
+** Product
+*** Pricing
+*** Onboarding
+*** Docs
+** Marketing
+*** Blog post
+*** Video demo
+*** Meetup talk
+** Engineering
+*** Load test
+*** Monitoring
+*** Rollback plan
+** Support
+*** FAQ
+*** Status page
+@endmindmap

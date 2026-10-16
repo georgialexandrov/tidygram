@@ -1,0 +1,17 @@
+@startjson
+#highlight "order" / "status"
+{
+  "order": {
+    "id": "A-1042",
+    "status": "paid",
+    "total": 48.5,
+    "customer": { "name": "Mira", "email": "mira@example.com", "vip": true },
+    "lines": [
+      { "sku": "BK-1", "qty": 2, "price": 12.0 },
+      { "sku": "MG-7", "qty": 1, "price": 24.5 }
+    ],
+    "tags": ["gift", "express"]
+  },
+  "meta": { "version": 3, "source": null }
+}
+@endjson

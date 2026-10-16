@@ -12,7 +12,7 @@ import { loadAvoid } from './scene/avoid.ts';
 import { THEMES } from './scene/theme.ts';
 import { fitToFrame } from './layout/fit.ts';
 import { largestScale } from './layout/scale.ts';
-import { buildScene } from './scene/scene.ts';
+import { buildAnyScene } from './scene/any.ts';
 import { layoutPathFor } from './paths.ts';
 
 const USAGE = `Usage: pnpm render <diagram.puml> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
@@ -80,7 +80,7 @@ if (values.scale) {
   console.log(`scale ${Math.round(scale * 100)}%`);
 }
 
-const scene = buildScene(diagram, layout, avoid);
+const scene = buildAnyScene(diagram, layout, avoid);
 
 const out = values.out ?? file.replace(/\.puml$/, '') + '.svg';
 writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));

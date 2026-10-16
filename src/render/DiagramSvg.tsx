@@ -7,6 +7,11 @@ import { roundedPath, trimEnd } from '../scene/geometry.ts';
 import { LINE_HEIGHT, type TextBlock } from '../scene/measure.ts';
 import type { Scene, SceneContainer, SceneEdge, SceneNode } from '../scene/scene.ts';
 import type { Theme } from '../scene/theme.ts';
+import { NodeBody } from './nodes.tsx';
+import type { AnyScene } from '../scene/any.ts';
+import { SequenceContent } from './SequenceSvg.tsx';
+import { GanttContent, TimingContent } from './TimeSvg.tsx';
+import { f, Text } from './text.tsx';
 
 export const EDITOR_COLORS = {
   selected: '#2F6FEB',
@@ -24,40 +29,6 @@ export interface Interaction {
   onLabelDown(id: string, e: PointerEvent): void;
   onViaDown(id: string, index: number, e: PointerEvent): void;
   onViaDoubleClick(id: string, index: number, e: MouseEvent): void;
-}
-
-const f = (n: number) => Math.round(n * 10) / 10;
-
-interface TextProps {
-  theme: Theme;
-  block: TextBlock;
-  cx: number;
-  top: number;
-  align?: 'middle' | 'start';
-  weight?: number | 'bold';
-  fill?: string;
-  caps?: boolean;
-}
-
-function Text({ theme, block, cx, top, align = 'middle', weight, fill, caps }: TextProps) {
-  const lineH = block.size * LINE_HEIGHT;
-  return (
-    <text
-      fontFamily={theme.font}
-      fontSize={block.size}
-      fontWeight={weight}
-      textAnchor={align}
-      fill={fill ?? theme.colors.text}
-      letterSpacing={caps ? '0.08em' : undefined}
-      style={{ pointerEvents: 'none', userSelect: 'none' }}
-    >
-      {block.lines.map((line, i) => (
-        <tspan key={i} x={f(cx)} y={f(top + i * lineH + (lineH - block.size) / 2 + block.size * 0.8)}>
-          {caps ? line.toUpperCase() : line}
-        </tspan>
-      ))}
-    </text>
-  );
 }
 
 function ActorFigure({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Theme; stroke?: string; strokeWidth: number }) {
@@ -167,6 +138,8 @@ function NodeViewImpl({ n, theme, ix, selected }: NodeProps) {
         <Text theme={theme} block={shape.text} cx={cx} top={top + (shape.stereo?.height ?? 0)} weight={weight} />
       </>
     );
+  } else if (n.node.kind !== 'note') {
+    body = <NodeBody n={n} theme={theme} stroke={sel} strokeWidth={strokeWidth} />;
   } else {
     const { x, y, w, h } = box;
     const fold = 10 * theme.scale;
@@ -200,7 +173,7 @@ const sameBox = (a: Box, b: Box) => a.x === b.x && a.y === b.y && a.w === b.w &&
 
 // Scenes are rebuilt on every move; elements whose geometry didn't change skip rendering.
 // `ix` is a stable object in the editor, so it isn't compared.
-const NodeView = memo(
+export const NodeView = memo(
   NodeViewImpl,
   (a, b) => a.n.node === b.n.node && sameBox(a.n.box, b.n.box) && a.n.pinned === b.n.pinned && a.theme === b.theme && a.selected === b.selected && !!a.ix === !!b.ix,
 );
@@ -216,23 +189,31 @@ function ContainerViewImpl({ c, theme, ix }: { c: SceneContainer; theme: Theme; 
   const nested = c.depth > 0;
   const title: TextBlock = { lines: [c.label], width: 0, height: theme.size.container * LINE_HEIGHT, size: theme.size.container };
   const k = theme.scale;
-  const radius = Math.max(2, theme.containerRadius - c.depth * 4 * k);
+  const kind = c.kind;
+  // Composite states are states: rounded like their children. C4 boundaries are dashed.
+  const radius = kind === 'state' ? 12 * k : Math.max(2, theme.containerRadius - c.depth * 4 * k);
+  const fill = kind === 'state' ? col.shapeFill : nested ? col.nestedFill : col.containerFill;
+  const stroke = kind === 'state' ? col.shapeStroke : nested ? col.nestedStroke : col.containerStroke;
+  const dash = kind === 'boundary' ? `${6 * k} ${4 * k}` : undefined;
+  const d3 = kind === 'node' ? 8 * k : 0;
   return (
     <g data-container={c.id}>
-      <rect
-        x={f(x)}
-        y={f(y)}
-        width={f(w)}
-        height={f(h)}
-        rx={radius}
-        fill={nested ? col.nestedFill : col.containerFill}
-        stroke={nested ? col.nestedStroke : col.containerStroke}
-        strokeWidth={1}
-      />
+      <rect x={f(x)} y={f(y + d3)} width={f(w - d3)} height={f(h - d3)} rx={d3 ? 0 : radius} fill={fill} stroke={stroke} strokeWidth={1} strokeDasharray={dash} />
+      {d3 > 0 && (
+        <path
+          d={`M${f(x)},${f(y + d3)} L${f(x + d3)},${f(y)} H${f(x + w)} V${f(y + h - d3)} L${f(x + w - d3)},${f(y + h)} M${f(x + w - d3)},${f(y + d3)} L${f(x + w)},${f(y)}`}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={1}
+        />
+      )}
+      {kind === 'state' && <path d={`M${f(x)},${f(y + 26 * k)} H${f(x + w)}`} stroke={stroke} strokeWidth={1} />}
       {/* Only the title strip grabs the pointer, so the inside stays free for nodes and panning. */}
       {ix && <rect x={f(x)} y={f(y)} width={f(w)} height={24 * k} fill="transparent" style={{ cursor: 'move' }} onPointerDown={(e) => ix.onContainerDown(c.id, e)} />}
-      {theme.containerTitle === 'caps' ? (
-        <Text theme={theme} block={title} cx={x + 16 * k} top={y + 10 * k} align="start" weight={600} fill={col.title} caps />
+      {kind === 'state' ? (
+        <Text theme={theme} block={{ ...title, size: theme.size.node, height: theme.size.node * LINE_HEIGHT }} cx={x + w / 2} top={y + 6 * k} weight={600} />
+      ) : theme.containerTitle === 'caps' ? (
+        <Text theme={theme} block={title} cx={x + 16 * k} top={y + 10 * k + d3} align="start" weight={600} fill={col.title} caps />
       ) : (
         <Text theme={theme} block={title} cx={x + w / 2} top={y + 6 * k} weight="bold" fill={col.title} />
       )}
@@ -245,17 +226,90 @@ function arrowHead(theme: Theme, kind: ArrowHead, tip: Point, from: Point, color
   const len = Math.hypot(tip[0] - from[0], tip[1] - from[1]) || 1;
   const dx = (tip[0] - from[0]) / len;
   const dy = (tip[1] - from[1]) / len;
+  // A point `back` along the line from the tip and `side` across it.
   const at = (back: number, side: number) => `${f(tip[0] - dx * back - dy * side)},${f(tip[1] - dy * back + dx * side)}`;
+  const xy = (back: number, side: number): [number, number] => [tip[0] - dx * back - dy * side, tip[1] - dy * back + dx * side];
   const t = `${f(tip[0])},${f(tip[1])}`;
   const k = Math.sqrt(theme.scale);
-  if (kind === 'triangle') {
-    const size = (theme.arrow === 'chevron' ? 12 : 14) * k;
-    return <polygon points={`${t} ${at(size, size / 2)} ${at(size, -size / 2)}`} fill={theme.colors.background} stroke={color} strokeLinejoin="round" />;
+  const sw = theme.colors.lineWidth;
+  const bg = theme.colors.background;
+  const bar = (back: number) => <polyline points={`${at(back * k, 6 * k)} ${at(back * k, -6 * k)}`} fill="none" stroke={color} strokeWidth={sw} />;
+  const ring = (back: number) => {
+    const [cx, cy] = xy(back * k, 0);
+    return <circle cx={f(cx)} cy={f(cy)} r={4 * k} fill={bg} stroke={color} strokeWidth={sw} />;
+  };
+  const crow = <polyline points={`${at(0, 7 * k)} ${at(11 * k, 0)} ${at(0, -7 * k)}`} fill="none" stroke={color} strokeWidth={sw} />;
+  switch (kind) {
+    case 'triangle': {
+      const size = (theme.arrow === 'chevron' ? 12 : 14) * k;
+      return <polygon points={`${t} ${at(size, size / 2)} ${at(size, -size / 2)}`} fill={bg} stroke={color} strokeLinejoin="round" />;
+    }
+    case 'diamond':
+    case 'diamondFilled':
+      return <polygon points={`${t} ${at(7 * k, 4.5 * k)} ${at(14 * k, 0)} ${at(7 * k, -4.5 * k)}`} fill={kind === 'diamondFilled' ? color : bg} stroke={color} strokeLinejoin="round" />;
+    case 'circle':
+      return ring(4);
+    case 'dot': {
+      const [cx, cy] = xy(4 * k, 0);
+      return <circle cx={f(cx)} cy={f(cy)} r={3.5 * k} fill={color} />;
+    }
+    case 'circlePlus': {
+      const [cx, cy] = xy(5 * k, 0);
+      return (
+        <g stroke={color} strokeWidth={sw}>
+          <circle cx={f(cx)} cy={f(cy)} r={5 * k} fill={bg} />
+          <path d={`M${f(cx - 5 * k)},${f(cy)} h${f(10 * k)} M${f(cx)},${f(cy - 5 * k)} v${f(10 * k)}`} />
+        </g>
+      );
+    }
+    case 'cross':
+      return <path d={`M${at(4 * k, 4 * k)} L${at(12 * k, -4 * k)} M${at(4 * k, -4 * k)} L${at(12 * k, 4 * k)}`} stroke={color} strokeWidth={sw} />;
+    case 'square':
+      return <polygon points={`${at(0, 4 * k)} ${at(8 * k, 4 * k)} ${at(8 * k, -4 * k)} ${at(0, -4 * k)}`} fill={bg} stroke={color} />;
+    case 'crowOne':
+      return (
+        <>
+          {bar(6)}
+          {bar(11)}
+        </>
+      );
+    case 'crowZeroOne':
+      return (
+        <>
+          {bar(6)}
+          {ring(15)}
+        </>
+      );
+    case 'crowMany':
+      return crow;
+    case 'crowOneMany':
+      return (
+        <>
+          {crow}
+          {bar(14)}
+        </>
+      );
+    case 'crowZeroMany':
+      return (
+        <>
+          {crow}
+          {ring(17)}
+        </>
+      );
   }
   if (theme.arrow === 'chevron') {
-    return <polyline points={`${at(8 * k, 4.5 * k)} ${t} ${at(8 * k, -4.5 * k)}`} fill="none" stroke={color} strokeWidth={theme.colors.lineWidth} strokeLinecap="round" strokeLinejoin="round" />;
+    return <polyline points={`${at(8 * k, 4.5 * k)} ${t} ${at(8 * k, -4.5 * k)}`} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />;
   }
   return <polygon points={`${t} ${at(10 * k, 4 * k)} ${at(7 * k, 0)} ${at(10 * k, -4 * k)}`} fill={color} stroke={color} />;
+}
+
+/** How far the line stops short of the tip so the head isn't drawn over it. */
+function headInset(theme: Theme, kind: ArrowHead): number {
+  const k = Math.sqrt(theme.scale);
+  if (kind === 'triangle') return (theme.arrow === 'chevron' ? 12 : 14) * k;
+  if (kind === 'diamond' || kind === 'diamondFilled') return 14 * k;
+  if (kind === 'circle' || kind === 'circlePlus') return 8 * k;
+  return 0;
 }
 
 interface EdgeProps {
@@ -271,14 +325,14 @@ const EdgeView = memo(EdgeViewImpl, (a, b) => a.e === b.e && a.theme === b.theme
 function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
   const id = e.edge.id;
   const c = theme.colors;
-  const base = e.kind === 'noteLink' ? c.noteLink : e.kind === 'generalization' ? c.generalization : e.dashed ? c.dependency : c.line;
+  const base =
+    e.kind === 'noteLink' ? c.noteLink : e.kind === 'generalization' || e.kind === 'realization' ? c.generalization : e.dashed ? c.dependency : c.line;
   const color = selected ? EDITOR_COLORS.selected : base;
   const pts = e.points;
   if (pts.length < 2) return null;
   let line = pts;
-  const trim = (theme.arrow === 'chevron' ? 12 : 14) * Math.sqrt(theme.scale);
-  if (e.head === 'triangle') line = trimEnd(line, trim);
-  if (e.tail === 'triangle') line = trimEnd([...line].reverse(), trim).reverse();
+  if (headInset(theme, e.head)) line = trimEnd(line, headInset(theme, e.head));
+  if (headInset(theme, e.tail)) line = trimEnd([...line].reverse(), headInset(theme, e.tail)).reverse();
   const d = roundedPath(line, theme.bendRadius);
   const dash = e.kind === 'noteLink' ? theme.dash.note : e.dashed ? theme.dash.dependency : undefined;
   const chip = theme.colors.labelStroke !== 'none';
@@ -298,6 +352,13 @@ function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
         />
       )}
       <path d={d} fill="none" stroke={color} strokeWidth={selected ? 2 : c.lineWidth} strokeDasharray={dash} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+      {e.edge.double && (
+        // Two parallel lines: a wide stroke with the background drawn down its middle.
+        <>
+          <path d={d} fill="none" stroke={color} strokeWidth={(selected ? 2 : c.lineWidth) * 2 + 3} style={{ pointerEvents: 'none' }} />
+          <path d={d} fill="none" stroke={c.background} strokeWidth={3} style={{ pointerEvents: 'none' }} />
+        </>
+      )}
       <g style={{ pointerEvents: 'none' }}>
         {arrowHead(theme, e.head, pts[pts.length - 1]!, pts[pts.length - 2]!, color)}
         {arrowHead(theme, e.tail, pts[0]!, pts[1]!, color)}
@@ -323,6 +384,12 @@ function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
             weight={chip ? 500 : undefined}
           />
         </g>
+      )}
+      {[e.fromLabel, e.toLabel].map(
+        (l, i) =>
+          l && (
+            <Text key={i} theme={theme} block={l.text} cx={l.x} top={l.y - l.text.height / 2} fill={c.muted} />
+          ),
       )}
       {selected &&
         e.via.map(([x, y], i) => (
@@ -363,13 +430,21 @@ export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }
 }
 
 /** Standalone, non-interactive SVG for export. With a frame, the canvas has exactly that aspect ratio. */
-export function DiagramSvg({ scene, frame, margin = 24 }: { scene: Scene; frame?: Point; margin?: number }) {
+export function DiagramSvg({ scene, frame, margin = 24 }: { scene: AnyScene; frame?: Point; margin?: number }) {
   const b = scene.bounds;
   const box: Box = frame ? frameRect(b, frame, margin) : { x: b.x - margin, y: b.y - margin, w: b.w + margin * 2, h: b.h + margin * 2 };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox={`${f(box.x)} ${f(box.y)} ${f(box.w)} ${f(box.h)}`} width={Math.ceil(box.w)} height={Math.ceil(box.h)}>
       <rect x={f(box.x)} y={f(box.y)} width={f(box.w)} height={f(box.h)} fill={scene.theme.colors.background} />
-      <DiagramContent scene={scene} />
+      <AnyContent scene={scene} />
     </svg>
   );
+}
+
+/** Renders whichever kind of scene it gets. */
+export function AnyContent({ scene, ix }: { scene: AnyScene; ix?: Interaction }) {
+  if (scene.kind === 'sequence') return <SequenceContent scene={scene} ix={ix} />;
+  if (scene.kind === 'gantt') return <GanttContent scene={scene} ix={ix} />;
+  if (scene.kind === 'timing') return <TimingContent scene={scene} ix={ix} />;
+  return <DiagramContent scene={scene} ix={ix} />;
 }

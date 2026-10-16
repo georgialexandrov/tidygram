@@ -1,0 +1,21 @@
+@startgantt gantt
+Project starts 2026-11-02
+saturday are closed
+sunday are closed
+-- Discovery --
+[Interviews] lasts 5 days
+[Requirements] lasts 4 days
+[Interviews] -> [Requirements]
+[Requirements signed off] happens at [Requirements]'s end
+-- Build --
+[API] as [api] lasts 10 days and starts at [Requirements]'s end
+[Web app] lasts 12 days and starts at [Requirements]'s end
+[api] is 60% completed
+[Web app] is 30% completed
+[Payments integration] lasts 6 days and starts at [api]'s end
+[Payments integration] is colored in Orange
+-- Launch --
+[Load test] lasts 3 days and starts at [Payments integration]'s end
+then [Beta] lasts 5 days
+[Launch] happens at [Beta]'s end
+@endgantt

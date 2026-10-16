@@ -1,0 +1,27 @@
+@startuml archimate
+!include <archimate/Archimate>
+' Online ordering, three layers
+Business_Actor(cust, "Customer")
+Business_Role(buyer, "Buyer")
+Business_Process(order, "Place order")
+Business_Service(ordering, "Ordering service")
+Business_Object(orderObj, "Order")
+archimate #Application "Web shop" as shop <<application-component>>
+Application_Service(checkout, "Checkout API")
+Application_Component(erp, "ERP")
+Grouping(infra, "Hosting") {
+  Technology_Node(k8s, "Kubernetes")
+  Technology_SystemSoftware(pg, "PostgreSQL")
+}
+Junction_And(j)
+Rel_Assignment(cust, buyer)
+Rel_Assignment(buyer, order)
+Rel_Realization(order, ordering)
+Rel_Access_w(order, orderObj)
+Rel_Serving(checkout, order, "used by")
+Rel_Realization(shop, checkout)
+Rel_Triggering(order, j)
+Rel_Flow(j, erp, "order data")
+Rel_Composition(k8s, pg)
+Rel_Serving_Up(k8s, shop)
+@enduml

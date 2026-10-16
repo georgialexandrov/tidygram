@@ -1,0 +1,24 @@
+@startnwdiag
+nwdiag {
+  inet [shape = cloud];
+  inet -- router;
+  network dmz {
+    address = "210.x.x.x/24"
+    router [address = "210.x.x.1"];
+    web01 [address = "210.x.x.10"];
+    web02 [address = "210.x.x.11"];
+  }
+  network internal {
+    address = "172.16.0.0/24";
+    web01 [address = "172.16.0.10"];
+    web02 [address = "172.16.0.11"];
+    db01 [address = "172.16.0.20", shape = database];
+    backup [description = "Backup box"];
+  }
+  group web {
+    description = "Web tier"
+    web01;
+    web02;
+  }
+}
+@endnwdiag

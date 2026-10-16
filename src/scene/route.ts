@@ -15,6 +15,9 @@ export interface RouteRequest {
   from: string;
   to: string;
   via?: Point[];
+  /** Free end points, for lines that end on a container's border instead of a shape. */
+  fromPoint?: Point;
+  toPoint?: Point;
 }
 
 export const ROUTING = {
@@ -49,12 +52,13 @@ export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, reques
   for (const r of requests) {
     const src = refs.get(r.from);
     const dst = refs.get(r.to);
-    if (!src || !dst) continue;
-    if (r.from === r.to) {
+    if ((!src && !r.fromPoint) || (!dst && !r.toPoint)) continue;
+    if (r.from === r.to && src) {
       result.set(r.id, selfLoop(shapes.get(r.from)!.box));
       continue;
     }
-    const conn = new A.ConnRef(router, new A.ConnEnd(src, 1), new A.ConnEnd(dst, 1));
+    const end = (ref: unknown, point: Point | undefined) => (point ? new A.ConnEnd(new A.Point(point[0], point[1])) : new A.ConnEnd(ref, 1));
+    const conn = new A.ConnRef(router, end(src, r.fromPoint), end(dst, r.toPoint));
     if (r.via?.length) {
       const checkpoints = new A.CheckpointVector();
       for (const [x, y] of r.via) checkpoints.push_back(new A.Checkpoint(new A.Point(x, y)));

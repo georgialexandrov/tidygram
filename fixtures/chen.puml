@@ -1,0 +1,35 @@
+@startchen chen
+' Movie rental, Chen notation
+entity DIRECTOR {
+  Number : INTEGER <<key>>
+  Name {
+    Fname : STRING
+    Lname : STRING
+  }
+  Born : DATE
+  Age : INTEGER <<derived>>
+}
+entity CUSTOMER {
+  Number : INTEGER <<key>>
+  Bonus : REAL <<multi>>
+}
+entity MOVIE {
+  Code : INTEGER <<key>>
+}
+relationship RENTED_TO {
+  Date : DATE
+}
+RENTED_TO -1- CUSTOMER
+RENTED_TO -N- MOVIE
+RENTED_TO -(N,M)- DIRECTOR
+entity CHILD <<weak>> {
+  Name : STRING <<key>>
+}
+relationship PARENT_OF <<identifying>> {
+}
+PARENT_OF -1- CUSTOMER
+PARENT_OF =N= CHILD
+entity TOURIST
+entity MEMBER
+CUSTOMER =>= d { TOURIST, MEMBER }
+@endchen

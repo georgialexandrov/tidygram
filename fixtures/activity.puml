@@ -1,0 +1,43 @@
+@startuml activity
+' Order checkout with swimlanes
+|Customer|
+start
+:Open cart;
+:Enter shipping address;
+|Shop|
+:Validate address;
+if (address valid?) then (yes)
+  :Calculate shipping;
+else (no)
+  |Customer|
+  :Fix address;
+  note right: shown inline\nwith a red border
+  |Shop|
+  :Re-validate;
+endif
+repeat
+  :Request payment;
+  |Payment Provider|
+  :Authorise card;
+  |Shop|
+repeat while (declined and attempts < 3?) is (retry) not (done)
+if (authorised?) then (yes)
+  fork
+    :Reserve stock;
+  fork again
+    :Send confirmation email;
+  fork again
+    :Notify warehouse;
+  end fork
+  :Create shipment;
+  while (items left to pack?) is (yes)
+    :Pack item;
+  endwhile (all packed)
+  -> handed to courier;
+  :Ship;
+  stop
+else (no)
+  :Cancel order;
+  end
+endif
+@enduml

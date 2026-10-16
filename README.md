@@ -6,8 +6,35 @@ lives in a sidecar, `diagram.layout.json`, keyed by the element ids in the
 source. When the author edits the source, your positions survive and new
 elements are placed next to what they connect to.
 
-Status: PlantUML use case diagrams. Mermaid is next; the parsers feed one
-format-neutral model (`src/model/types.ts`), so a new input is a new parser.
+## Supported PlantUML diagrams
+
+| Type | Status | Fixture |
+|---|---|---|
+| Use case | ✅ | `food-delivery.puml` |
+| Component | ✅ components, interfaces (`()`), `[x]` shorthand, queues, databases, nodes, clouds | `component.puml` |
+| Deployment | ✅ node (3D), artifact, database, storage, cloud, file, folder, queue, stack, hexagon, ... | `deployment.puml` |
+| Class / object | ✅ compartments, abstract/interface/enum, `extends`/`implements`, composition/aggregation/realization, multiplicities | `class.puml` |
+| ER (IE notation) | ✅ entities, crow's feet (`\|\|--o{`) | `er.puml` |
+| State | ✅ composite states, scoped `[*]`, choice, fork/join, history, descriptions; lines can end on a composite | `state.puml` |
+| C4 (stdlib macros) | ✅ Person/System/Container/Component (+Db/Queue/_Ext), boundaries, Rel/BiRel/Lay | `c4.puml` |
+| Mindmap / WBS | ✅ as trees | `mindmap.puml` |
+| Sequence | ✅ own model: participants as columns (drag to move/reorder), events as rows; activation, return, create/destroy, lost/found, notes, alt/else/loop/par/…, dividers, delays, refs, autonumber, boxes | `sequence.puml` |
+| Activity | ✅ compiled into the graph: if/elseif/else, while, repeat, fork/split, switch, notes, partitions; swimlanes as columns | `activity.puml` |
+| Gantt | ✅ durations, `starts at [X]'s end`, dates, `->`, `then`, milestones, completion, colours, sections, closed weekdays | `gantt.puml` |
+| Timing | ✅ robust, concise, clock, binary; `@t` blocks; messages | `timing.puml` |
+| JSON / YAML | ✅ objects and arrays as tables, nested values linked by key; ids are paths (`$.order.lines[0]`); block YAML incl. `- key:` items, flow `[..]`/`{..}`, `\|`/`>` | `json.puml`, `yaml.puml` |
+| Chen ER | ✅ entities, relationships (diamonds), attributes (ellipses, owner-scoped ids), composite attributes, `<<key>>`/`<<multi>>`/`<<derived>>`/`<<weak>>`/`<<identifying>>`, `-N-`, `-(1,N)-`, `=N=` (double line), `=>= d { A, B }` | `chen.puml` |
+| ArchiMate | ✅ `archimate #Layer "X" as A <<type>>`, `Business_Actor(..)`-style macros, Grouping, junctions, every `Rel_*` with its own ends (direction suffixes ignored); no layer colours | `archimate.puml` |
+| nwdiag | ✅ networks as bars, hosts with per-network addresses, shapes, descriptions, groups, peer links; networks stack in source order | `nwdiag.puml` |
+| Salt, regex, EBNF, math, ditaa, ... | recognised and reported; no layout to manage | |
+
+The family is detected first because PlantUML reads some keywords per
+type (`interface` is a lollipop in a component diagram and a class box in a
+class diagram; `{` opens a container in one and a member list in the other).
+Lines nothing understands become warnings, never errors.
+
+Mermaid is next; the parsers feed one format-neutral model
+(`src/model/types.ts`), so a new input is a new parser.
 
 ## Use
 

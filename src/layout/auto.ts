@@ -32,6 +32,34 @@ export interface ElkVariant {
   spacing?: { node: number; layer: number };
 }
 
+/**
+ * Swimlanes are columns, not boxes: lay the flow out as if they weren't
+ * there (so rows follow the flow), then slide each lane's nodes into its own
+ * column, keeping their order and spacing within the lane.
+ */
+async function laneLayout(diagram: Diagram, shapes: Map<string, NodeShape>, theme: Theme, variant: ElkVariant | undefined): Promise<Positions> {
+  const lanes = diagram.containers.filter((c) => c.kind === 'swimlane');
+  const laneOf = new Map(diagram.nodes.map((n) => [n.id, n.parent && lanes.some((l) => l.id === n.parent) ? n.parent : lanes[0]!.id]));
+  const flat: Diagram = {
+    ...diagram,
+    containers: diagram.containers.filter((c) => c.kind !== 'swimlane').map((c) => (lanes.some((l) => l.id === c.parent) ? { ...c, parent: undefined } : c)),
+    nodes: diagram.nodes.map((n) => (lanes.some((l) => l.id === n.parent) ? { ...n, parent: undefined } : n)),
+  };
+  const raw = await elkPositions(flat, shapes, theme, variant ?? { direction: 'DOWN', hierarchy: 'include' });
+  const gap = 40 * theme.scale;
+  let cursor = 0;
+  const out: Positions = {};
+  for (const lane of lanes) {
+    const members = diagram.nodes.filter((n) => laneOf.get(n.id) === lane.id && raw[n.id]);
+    if (!members.length) continue;
+    const left = Math.min(...members.map((n) => raw[n.id]!.x - shapes.get(n.id)!.w / 2));
+    const right = Math.max(...members.map((n) => raw[n.id]!.x + shapes.get(n.id)!.w / 2));
+    for (const n of members) out[n.id] = { x: cursor + (raw[n.id]!.x - left), y: raw[n.id]!.y };
+    cursor += right - left + gap * 2;
+  }
+  return out;
+}
+
 /** Full automatic layout with ELK's layered algorithm, containers as compound nodes. */
 export async function elkPositions(
   diagram: Diagram,
@@ -39,6 +67,7 @@ export async function elkPositions(
   theme: Theme = themeFor(undefined),
   variant: ElkVariant = { direction: diagram.direction === 'LR' ? 'RIGHT' : 'DOWN', hierarchy: 'include' },
 ): Promise<Positions> {
+  if (diagram.containers.some((c) => c.kind === 'swimlane')) return laneLayout(diagram, shapes, theme, variant.direction === 'DOWN' ? variant : undefined);
   const elkNodes = new Map<string, ElkNode>();
   const spacing: Record<string, string> = variant.spacing
     ? { ...SPACING, 'elk.spacing.nodeNode': String(variant.spacing.node), 'elk.layered.spacing.nodeNodeBetweenLayers': String(variant.spacing.layer) }
@@ -84,17 +113,31 @@ export async function elkPositions(
   for (const c of diagram.containers) parentOf(c.parent).children!.push(elkNodes.get(`c:${c.id}`)!);
   for (const n of diagram.nodes) parentOf(n.parent).children!.push(elkNodes.get(`n:${n.id}`)!);
 
+  const ref = (id: string) => (elkNodes.has(`n:${id}`) ? `n:${id}` : elkNodes.has(`c:${id}`) ? `c:${id}` : undefined);
+  const containerEdges: ElkExtendedEdge[] = [];
   diagram.edges.forEach((e, i) => {
     if (e.from === e.to) return;
-    const edge: ElkExtendedEdge = { id: `e${i}`, sources: [`n:${e.from}`], targets: [`n:${e.to}`] };
+    // Layout follows the order the source wrote: `A <|-- B` puts A first (above or left), like PlantUML.
+    const [first, second] = e.reversed ? [e.to, e.from] : [e.from, e.to];
+    const source = ref(first);
+    const target = ref(second);
+    if (!source || !target) return;
+    const edge: ElkExtendedEdge = { id: `e${i}`, sources: [source], targets: [target] };
     if (e.label) {
       const t = measureText(e.label, theme.size.edge, false, theme.widthFactor);
       edge.labels = [{ text: e.label, width: t.width, height: t.height }];
     }
-    root.edges!.push(edge);
+    (source.startsWith('c:') || target.startsWith('c:') ? containerEdges : root.edges!).push(edge);
   });
 
-  const result = await elk().layout(root);
+  // Lines to a container (a composite state, a boundary) help placement, but ELK rejects some
+  // of them (e.g. a container linked to its own child); fall back to laying out without them.
+  let result: ElkNode;
+  try {
+    result = await elk().layout({ ...root, edges: [...root.edges!, ...containerEdges] });
+  } catch {
+    result = await elk().layout(root);
+  }
   const positions: Positions = {};
   const walk = (node: ElkNode, ox: number, oy: number) => {
     for (const child of node.children ?? []) {
@@ -192,6 +235,8 @@ export type LayoutMode =
   | 'reset';
 
 export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: LayoutMode = 'fill'): Promise<LayoutFile> {
+  // Ordered diagrams (sequence, ...) compute their layout on every build; only dragged columns are stored.
+  if (diagram.special) return mode === 'fill' ? layout : { ...layout, nodes: {}, edges: {} };
   const theme = themeOf(layout.view);
   const shapes = shapesFor(diagram, theme);
   const pad = containerPad(theme);

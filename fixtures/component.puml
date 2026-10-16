@@ -1,0 +1,40 @@
+@startuml component
+' Event-driven order processing
+actor Customer
+package "Edge" as Edge {
+  [Web App] as Web
+  [API Gateway] as Gateway
+}
+cloud "AWS" as AWS {
+  node "Orders" as OrdersNode {
+    [Order Service] as Orders
+    database "Orders DB" as OrdersDb
+  }
+  node "Payments" as PaymentsNode {
+    [Payment Service] as Payments
+    database "Ledger" as Ledger
+  }
+  queue "Order Events" as Events
+  [Notification Service] as Notify
+  [Inventory Service] as Inventory
+  database "Inventory DB" as InventoryDb
+}
+interface "REST" as Rest
+() "Webhooks" as Hooks
+component "Stripe" as Stripe <<external>>
+
+Customer --> Web
+Web --> Gateway
+Gateway - Rest
+Rest --> Orders
+Orders --> OrdersDb
+Orders ..> Events : publishes
+Events ..> Payments : consumes
+Events ..> Notify : consumes
+Events ..> Inventory : consumes
+Payments --> Ledger
+Payments --> Stripe
+Stripe --> Hooks
+Hooks --> Payments
+Inventory --> InventoryDb
+@enduml

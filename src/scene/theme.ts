@@ -337,7 +337,53 @@ const mint = variant('mint', 'Mint', {
   labelStroke: '#BDEBD3',
 });
 
-export const THEMES: Record<string, Theme> = { classic, modern, midnight, blueprint, editorial, mono, mint };
+/** Matches the editor chrome: black ink on warm white, primaries only as signals. */
+const primary = variant(
+  'primary',
+  'Primary',
+  {
+    background: '#FDFCFA',
+    text: '#1A1A1A',
+    muted: '#4F4C46',
+    title: '#1A1A1A',
+    actorText: '#1A1A1A',
+    line: '#1A1A1A',
+    lineWidth: 1,
+    dependency: '#CC4116',
+    dependencyLabel: '#A8340F',
+    generalization: '#1A1A1A',
+    noteLink: '#A8A49A',
+    shapeFill: '#FFFFFF',
+    shapeStroke: '#1A1A1A',
+    actorFill: '#1F4E9C',
+    actorStroke: '#1F4E9C',
+    actorGlyph: '#FFFFFF',
+    systemFill: '#F2C12E',
+    systemStroke: '#1A1A1A',
+    systemGlyph: '#1A1A1A',
+    noteFill: '#FBF1CF',
+    noteStroke: '#C99C12',
+    noteText: '#1A1A1A',
+    containerFill: '#F3F1EC',
+    containerStroke: '#1A1A1A',
+    nestedFill: '#FDFCFA',
+    nestedStroke: '#A8A49A',
+    labelFill: '#FDFCFA',
+    labelStroke: '#CC4116',
+  },
+  {
+    font: "Futura, 'Futura PT', 'Century Gothic', 'Avenir Next', sans-serif",
+    widthFactor: 1.08,
+    nodeWeight: 500,
+    usecase: 'ellipse',
+    containerRadius: 0,
+    bendRadius: 0,
+    arrow: 'filled',
+    dash: { dependency: '6 4', note: '2 3' },
+  },
+);
+
+export const THEMES: Record<string, Theme> = { classic, modern, midnight, blueprint, editorial, mono, mint, primary };
 
 export function themeFor(name: string | undefined): Theme {
   return THEMES[name ?? ''] ?? classic;

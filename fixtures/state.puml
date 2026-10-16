@@ -1,0 +1,44 @@
+@startuml state
+' Order lifecycle
+[*] --> Draft
+Draft --> Submitted : submit
+Submitted --> Review : needs review
+Submitted --> Paying : auto-approve
+
+state Review {
+  [*] --> Waiting
+  Waiting --> Approved : approve
+  Waiting --> Rejected : reject
+  Approved --> [*]
+  Rejected --> [*]
+}
+Review --> Paying : approved
+Review --> Cancelled : rejected
+
+state Paying : charge card
+state Paying : retry 3 times
+state check <<choice>>
+Paying --> check
+check --> Fulfilment : paid
+check --> Cancelled : failed
+
+state Fulfilment {
+  state split <<fork>>
+  state merge <<join>>
+  [*] --> split
+  split --> Picking
+  split --> Invoicing
+  Picking --> Packing
+  Packing --> merge
+  Invoicing --> merge
+  merge --> [*]
+}
+Fulfilment --> Shipped
+Shipped --> Delivered : signed
+Delivered --> [*]
+Cancelled --> [*]
+note right of Paying
+  Card is charged once;
+  retries use the same idempotency key.
+end note
+@enduml

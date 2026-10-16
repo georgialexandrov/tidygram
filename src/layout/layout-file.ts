@@ -30,6 +30,8 @@ export interface ViewSettings {
   text?: number;
   /** Extra multiplier for actor/system icons only, on top of `scale`. */
   icons?: number;
+  /** Sequence diagrams: column and row gap multipliers. */
+  spacing?: Point;
 }
 
 export interface LayoutFile {
@@ -67,7 +69,9 @@ export function parseLayout(text: string): LayoutFile {
     if (text !== undefined && text >= 0.25 && text <= 6 && text !== 1) view.text = text;
     const icons = num(raw.view.icons);
     if (icons !== undefined && icons >= 0.25 && icons <= 6 && icons !== 1) view.icons = icons;
-    if (view.theme || view.frame || view.scale || view.text || view.icons) layout.view = view;
+    const spacing = point(raw.view.spacing);
+    if (spacing && spacing[0] > 0 && spacing[1] > 0 && (spacing[0] !== 1 || spacing[1] !== 1)) view.spacing = spacing;
+    if (view.theme || view.frame || view.scale || view.text || view.icons || view.spacing) layout.view = view;
   }
   if (raw.nodes && typeof raw.nodes === 'object') {
     for (const [id, value] of Object.entries(raw.nodes as Record<string, Record<string, unknown>>)) {
@@ -117,6 +121,7 @@ export function serializeLayout(layout: LayoutFile): string {
   if (layout.view?.scale && layout.view.scale !== 1) viewParts.push(`"scale": ${Math.round(layout.view.scale * 100) / 100}`);
   if (layout.view?.text && layout.view.text !== 1) viewParts.push(`"text": ${Math.round(layout.view.text * 100) / 100}`);
   if (layout.view?.icons && layout.view.icons !== 1) viewParts.push(`"icons": ${Math.round(layout.view.icons * 100) / 100}`);
+  if (layout.view?.spacing) viewParts.push(`"spacing": [${layout.view.spacing.map((v) => Math.round(v * 100) / 100).join(', ')}]`);
   const view = viewParts.length ? `  "view": { ${viewParts.join(', ')} },\n` : '';
   return `{\n  "version": 1,\n${view}  "nodes": ${block(nodeLines)},\n  "edges": ${block(edgeLines)}\n}\n`;
 }

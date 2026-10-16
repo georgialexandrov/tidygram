@@ -24,6 +24,12 @@ export interface SceneContainer {
   depth: number;
 }
 
+export interface EndLabel {
+  text: TextBlock;
+  x: number;
+  y: number;
+}
+
 export interface SceneEdge {
   edge: DEdge;
   kind: EdgeKind;
@@ -33,9 +39,13 @@ export interface SceneEdge {
   dashed: boolean;
   via: Point[];
   label?: { text: TextBlock; x: number; y: number };
+  /** Labels at the ends (multiplicities). */
+  fromLabel?: EndLabel;
+  toLabel?: EndLabel;
 }
 
 export interface Scene {
+  kind: 'graph';
   theme: Theme;
   nodes: SceneNode[];
   containers: SceneContainer[];
@@ -89,7 +99,16 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     }
     return depth;
   };
-  const containers: SceneContainer[] = [...containerBoxes(diagram, positions, shapes, containerPad(theme))]
+  const boxes = containerBoxes(diagram, positions, shapes, containerPad(theme));
+  // Swimlanes run the full height of the diagram, side by side.
+  const lanes = diagram.containers.filter((c) => c.kind === 'swimlane' && boxes.has(c.id));
+  if (lanes.length) {
+    const laneBoxes = lanes.map((l) => boxes.get(l.id)!);
+    const top = Math.min(...laneBoxes.map((b) => b.y));
+    const bottom = Math.max(...laneBoxes.map((b) => b.y + b.h));
+    for (const b of laneBoxes) Object.assign(b, { y: top, h: bottom - top });
+  }
+  const containers: SceneContainer[] = [...boxes]
     .map(([id, box]) => {
       const c = diagram.containers.find((x) => x.id === id)!;
       return { id, kind: c.kind, label: c.label, box, depth: depthOf(id) };
@@ -98,7 +117,28 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
 
   // One centred box per node is what libavoid routes fastest; lines are clipped to the figure/ellipse afterwards.
   const routeShapes = new Map<string, RouteShape>(nodes.map((n) => [n.node.id, { box: n.box }]));
-  const visible = diagram.edges.filter((e) => !e.hidden && byId.has(e.from) && byId.has(e.to));
+  const containerBox = new Map(containers.map((c) => [c.id, c.box]));
+  const has = (id: string) => byId.has(id) || containerBox.has(id);
+  const visible = diagram.edges.filter((e) => !e.hidden && has(e.from) && has(e.to));
+  const centreOf = (id: string): Point => {
+    const n = byId.get(id);
+    if (n) return [n.anchor.cx, n.anchor.cy];
+    const b = containerBox.get(id)!;
+    return [b.x + b.w / 2, b.y + b.h / 2];
+  };
+  /** Where a line meets a container: the border point facing the other end (the top if the other end is inside). */
+  const borderPoint = (id: string, other: string): Point | undefined => {
+    const b = containerBox.get(id);
+    if (!b) return undefined;
+    const [ox, oy] = centreOf(other);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    if (ox > b.x && ox < b.x + b.w && oy > b.y && oy < b.y + b.h) return [Math.min(Math.max(ox, b.x + 12), b.x + b.w - 12), b.y];
+    const dx = ox - cx;
+    const dy = oy - cy;
+    const t = Math.min(dx ? b.w / 2 / Math.abs(dx) : Infinity, dy ? b.h / 2 / Math.abs(dy) : Infinity);
+    return [cx + dx * t, cy + dy * t];
+  };
   const { previous, dirty } = options;
   const reused = new Map<string, SceneEdge>();
   if (previous && dirty && previous.theme === theme) {
@@ -111,19 +151,20 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const routes = routeEdges(
     avoid,
     routeShapes,
-    visible.filter((e) => !reused.has(e.id)).map((e) => ({ id: e.id, from: e.from, to: e.to, via: layout.edges[e.id]?.via })),
+    visible
+      .filter((e) => !reused.has(e.id))
+      .map((e) => ({ id: e.id, from: e.from, to: e.to, via: layout.edges[e.id]?.via, fromPoint: borderPoint(e.from, e.to), toPoint: borderPoint(e.to, e.from) })),
   );
 
   const edges: SceneEdge[] = visible.map((e) => {
     const kept = reused.get(e.id);
     if (kept) return kept;
-    const from = byId.get(e.from)!;
-    const to = byId.get(e.to)!;
-    let points = routes.get(e.id) ?? [
-      [from.anchor.cx, from.anchor.cy],
-      [to.anchor.cx, to.anchor.cy],
-    ];
-    points = simplify(clipEnd(clipStart(points, from.anchor), to.anchor));
+    const from = byId.get(e.from);
+    const to = byId.get(e.to);
+    let points = routes.get(e.id) ?? [centreOf(e.from), centreOf(e.to)];
+    if (from) points = clipStart(points, from.anchor);
+    if (to) points = clipEnd(points, to.anchor);
+    points = simplify(points);
     const scene: SceneEdge = {
       edge: e,
       kind: e.kind,
@@ -138,18 +179,33 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
       const [ox, oy] = layout.edges[e.id]?.label ?? [0, 0];
       scene.label = { text: measureText(labelText(e.label, theme), theme.size.edge, false, theme.widthFactor), x: mx + ox, y: my + oy };
     }
+    if (e.fromLabel) scene.fromLabel = endLabel(e.fromLabel, points, theme);
+    if (e.toLabel) scene.toLabel = endLabel(e.toLabel, [...points].reverse(), theme);
     return scene;
   });
 
   const all: Box[] = [...nodes.map((n) => n.box), ...containers.map((c) => c.box)];
   for (const e of edges) for (const [x, y] of e.points) all.push({ x, y, w: 0, h: 0 });
+  for (const e of edges) for (const l of [e.fromLabel, e.toLabel]) if (l) all.push({ x: l.x - l.text.width / 2, y: l.y - l.text.height / 2, w: l.text.width, h: l.text.height });
   for (const e of edges) if (e.label) all.push({ x: e.label.x - e.label.text.width / 2 - 6 * theme.scale, y: e.label.y - e.label.text.height / 2 - 2 * theme.scale, w: e.label.text.width + 12 * theme.scale, h: e.label.text.height + 4 * theme.scale });
   if (!all.length) all.push({ x: 0, y: 0, w: 0, h: 0 });
   const x0 = Math.min(...all.map((b) => b.x));
   const y0 = Math.min(...all.map((b) => b.y));
   const x1 = Math.max(...all.map((b) => b.x + b.w));
   const y1 = Math.max(...all.map((b) => b.y + b.h));
-  return { theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+  return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+}
+
+/** A multiplicity next to the line's start: a little way along it, set off to one side. */
+function endLabel(text: string, points: Point[], theme: Theme): EndLabel {
+  const block = measureText(text, theme.size.edge, false, theme.widthFactor);
+  const [a, b] = [points[0]!, points[1] ?? points[0]!];
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  const ux = (b[0] - a[0]) / len;
+  const uy = (b[1] - a[1]) / len;
+  const along = 10 * theme.scale + block.height / 2;
+  const side = 6 * theme.scale + (Math.abs(ux) > 0.5 ? block.height / 2 : block.width / 2);
+  return { text: block, x: a[0] + ux * along - uy * side, y: a[1] + uy * along + ux * side };
 }
 
 export function labelText(label: string, theme: Theme): string {

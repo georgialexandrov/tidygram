@@ -67,20 +67,24 @@ export function SourcePanel({ file, source, layoutJson, highlighted, onLineClick
   }, [highlighted, tab]);
 
   return (
-    <aside className="source-panel">
+    <aside className="source-panel" aria-label="Source">
       <div className="source-tabs">
-        <button className={tab === 'source' ? 'active' : ''} onClick={() => setTab('source')} title="The original, read-only">
-          {file.split('/').pop()}
-        </button>
-        <button className={tab === 'layout' ? 'active' : ''} onClick={() => setTab('layout')} title="Your changes: the sidecar file">
-          layout.json
-        </button>
+        <div className="selector" role="tablist" aria-label="Show">
+          <button role="tab" aria-selected={tab === 'source'} className={tab === 'source' ? 'active' : ''} onClick={() => setTab('source')} title="The original, read-only">
+            {file.split('/').pop()}
+          </button>
+          <button role="tab" aria-selected={tab === 'layout'} className={tab === 'layout' ? 'active' : ''} onClick={() => setTab('layout')} title="Your changes: the sidecar file">
+            layout.json
+          </button>
+        </div>
         <span className="spacer" />
-        <button onClick={() => void navigator.clipboard?.writeText(tab === 'source' ? source : layoutJson)} title="Copy">
+        <button className="panel-key" onClick={() => void navigator.clipboard?.writeText(tab === 'source' ? source : layoutJson)} title="Copy">
           Copy
         </button>
-        <button onClick={onClose} title="Close (S)">
-          ×
+        <button className="panel-key close" onClick={onClose} title="Close (S)" aria-label="Close source panel">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M1 1l8 8M9 1l-8 8" />
+          </svg>
         </button>
       </div>
       <div className="source-body" ref={body}>
@@ -95,7 +99,11 @@ export function SourcePanel({ file, source, layoutJson, highlighted, onLineClick
           <pre className="layout-json">{layoutJson}</pre>
         )}
       </div>
-      {tab === 'source' && <div className="source-note">Read-only: the source belongs to its author. Your changes live in layout.json.</div>}
+      {tab === 'source' && (
+        <div className="source-note">
+          <b>Read-only</b> The source belongs to its author. Your changes live in layout.json.
+        </div>
+      )}
     </aside>
   );
 }

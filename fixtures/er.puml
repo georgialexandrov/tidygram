@@ -1,0 +1,38 @@
+@startuml er
+' Blog schema, information-engineering notation
+entity "User" as User {
+  * id : bigint <<PK>>
+  --
+  * email : text
+  name : text
+}
+entity "Post" as Post {
+  * id : bigint <<PK>>
+  --
+  * author_id : bigint <<FK>>
+  * title : text
+  body : text
+  published_at : timestamp
+}
+entity "Comment" as Comment {
+  * id : bigint <<PK>>
+  --
+  * post_id : bigint <<FK>>
+  * user_id : bigint <<FK>>
+  body : text
+}
+entity "Tag" as Tag {
+  * id : bigint <<PK>>
+  --
+  * name : text
+}
+entity "PostTag" as PostTag {
+  * post_id : bigint <<FK>>
+  * tag_id : bigint <<FK>>
+}
+User ||--o{ Post : writes
+User ||--o{ Comment
+Post ||--o{ Comment
+Post ||--o{ PostTag
+Tag ||--o{ PostTag
+@enduml

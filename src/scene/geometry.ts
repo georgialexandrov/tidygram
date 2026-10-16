@@ -7,6 +7,9 @@ export interface AnchorShape extends Anchor {
 }
 
 export function inside(shape: AnchorShape, [x, y]: Point): boolean {
+  if (shape.shape === 'diamond') {
+    return Math.abs(x - shape.cx) / (shape.w / 2) + Math.abs(y - shape.cy) / (shape.h / 2) < 1;
+  }
   if (shape.shape === 'pill') {
     const r = Math.min(shape.w, shape.h) / 2;
     const dx = Math.max(0, Math.abs(x - shape.cx) - (shape.w / 2 - r));

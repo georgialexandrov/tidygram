@@ -1,0 +1,22 @@
+@startyaml
+# Deployment for the orders service
+service: orders
+replicas: 3
+image:
+  name: registry.local/orders
+  tag: "1.8.2"
+env:
+  - name: DATABASE_URL
+    valueFrom:
+      secret: orders-db
+  - name: LOG_LEVEL
+    value: info
+ports: [8080, 9090]
+probes:
+  liveness: { path: /healthz, period: 10 }
+  readiness:
+    path: /ready
+notes: |
+  Scales on queue depth.
+  Owned by the payments team.
+@endyaml

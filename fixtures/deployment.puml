@@ -1,0 +1,23 @@
+@startuml deployment
+node "Load Balancer" as LB
+node "App Server 1" as App1 {
+  artifact "shop.jar" as Jar1
+}
+node "App Server 2" as App2 {
+  artifact "shop.jar" as Jar2
+}
+database "PostgreSQL" as Pg {
+  storage "WAL" as Wal
+}
+cloud "CDN" as Cdn
+file "nginx.conf" as Conf
+queue "RabbitMQ" as Mq
+Cdn --> LB
+LB --> App1
+LB --> App2
+LB ..> Conf
+Jar1 --> Pg
+Jar2 --> Pg
+Jar1 --> Mq
+Jar2 --> Mq
+@enduml

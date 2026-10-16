@@ -1,0 +1,42 @@
+@startuml sequence
+' Checkout with payment, a busy sequence
+autonumber
+actor Customer as C
+participant "Web App" as Web
+participant "API Gateway" as GW
+box "Payments" #LightBlue
+  participant "Payment Service" as Pay
+  database "Ledger" as Ledger
+end box
+queue "Event Bus" as Bus
+participant "Stripe" as Stripe
+
+C -> Web : click "Pay"
+activate Web
+Web -> GW ++ : POST /checkout
+GW -> Pay ++ : charge(order)
+Pay -> Ledger : reserve funds
+Ledger --> Pay : reservation id
+alt card accepted
+  Pay -> Stripe ++ : create PaymentIntent
+  Stripe --> Pay -- : succeeded
+  Pay ->> Bus : OrderPaid
+  note right of Bus : consumers: shipping,\nemail, analytics
+else card declined
+  Pay -> Stripe : create PaymentIntent
+  Stripe --> Pay : declined
+  Pay -> Ledger : release funds
+  Pay ->x Bus : PaymentFailed (dropped)
+end
+return result
+GW --> Web -- : 200 OK
+== Async fulfilment ==
+loop every 5s until shipped
+  Web -> GW : GET /orders/42
+  GW --> Web : status
+end
+... customer waits ...
+Web --> C : confirmation page
+deactivate Web
+note over C, Web : Order 42 complete
+@enduml

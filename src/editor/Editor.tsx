@@ -6,10 +6,11 @@ import { ensureLayout, type LayoutMode } from '../layout/auto.ts';
 import { emptyLayout, parseLayout, serializeLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
 import { parsePuml } from '../model/parse.ts';
 import type { Diagram, ParseWarning } from '../model/types.ts';
-import { DiagramContent, DiagramSvg, type Interaction } from '../render/DiagramSvg.tsx';
+import { AnyContent, DiagramSvg, type Interaction } from '../render/DiagramSvg.tsx';
+import { buildAnyScene, type AnyScene } from '../scene/any.ts';
+import { sourceItems } from '../model/items.ts';
 import type { Avoid } from '../scene/avoid.ts';
-import { overlaps, type Box } from '../scene/containers.ts';
-import { buildScene, type Scene } from '../scene/scene.ts';
+import { ancestry, overlaps, type Box } from '../scene/containers.ts';
 import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
 import { THEMES } from '../scene/theme.ts';
 import { fitToFrame } from '../layout/fit.ts';
@@ -29,16 +30,22 @@ interface Doc {
 function Stepper({ label, value, onChange, title }: { label: string; value: number; onChange(v: number): void; title: string }) {
   const step = (d: number) => onChange(Math.min(3, Math.max(0.5, Math.round((value + d) * 10) / 10)));
   return (
-    <span className="stepper" title={title}>
-      <span className="stepper-label">{label}</span>
-      <button onClick={() => step(-0.1)} aria-label={`Smaller ${label.toLowerCase()}`}>
-        −
+    <span className="stepper" title={title} role="group" aria-label={`${label} size`}>
+      <span className="stepper-label" aria-hidden="true">
+        {label}
+      </span>
+      <button className="stepper-step" onClick={() => step(-0.1)} aria-label={`Smaller ${label.toLowerCase()}`}>
+        <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+          <path d="M0 4h8" />
+        </svg>
       </button>
       <button className="stepper-value" onClick={() => onChange(1)} title="Reset to 100%">
         {Math.round(value * 100)}%
       </button>
-      <button onClick={() => step(0.1)} aria-label={`Larger ${label.toLowerCase()}`}>
-        +
+      <button className="stepper-step" onClick={() => step(0.1)} aria-label={`Larger ${label.toLowerCase()}`}>
+        <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+          <path d="M0 4h8M4 0v8" />
+        </svg>
       </button>
     </span>
   );
@@ -101,7 +108,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const drag = useRef<Drag | null>(null);
   /** While dragging: what moved, so only its lines are re-routed. Null means a full build. */
   const dirty = useRef<{ nodes: ReadonlySet<string>; edges: ReadonlySet<string> } | null>(null);
-  const previousScene = useRef<Scene | null>(null);
+  const previousScene = useRef<AnyScene | null>(null);
   const undoStack = useRef<LayoutFile[]>([]);
   const redoStack = useRef<LayoutFile[]>([]);
   const layoutRef = useRef(layout);
@@ -206,12 +213,13 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     return () => hot.off('puml:changed', handler);
   }, [load]);
 
-  const scene: Scene | null = useMemo(() => {
+  const scene: AnyScene | null = useMemo(() => {
     if (!doc) return null;
     try {
       const t0 = performance.now();
-      const fast = dirty.current && previousScene.current ? { previous: previousScene.current, dirty: dirty.current } : {};
-      const built = buildScene(doc.diagram, layout, avoid, fast);
+      const prev = previousScene.current;
+      const fast = dirty.current && prev?.kind === 'graph' ? { previous: prev, dirty: dirty.current } : {};
+      const built = buildAnyScene(doc.diagram, layout, avoid, fast);
       perf.record(dirty.current ? 'scene (drag)' : 'scene (full)', performance.now() - t0);
       previousScene.current = built;
       return built;
@@ -230,6 +238,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     requestAnimationFrame(() => requestAnimationFrame(() => perf.record('frame', performance.now() - start)));
   }, [scene]);
 
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
   const frame = layout.view?.frame;
   const frameBox = useMemo(() => (scene && frame ? frameRect(scene.bounds, frame) : null), [scene, frame]);
 
@@ -259,7 +269,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   const startNodeDrag = (ids: string[], primary: string, e: ReactPointerEvent) => {
     const l = layoutRef.current;
-    const origin = Object.fromEntries(ids.filter((id) => l.nodes[id]).map((id) => [id, { x: l.nodes[id]!.x, y: l.nodes[id]!.y }]));
+    // Sequence columns have no stored position until dragged; start from where the layout put them.
+    const columns = sceneRef.current?.kind === 'sequence' ? sceneRef.current.columns : {};
+    const at = (id: string) => l.nodes[id] ?? (columns[id] !== undefined ? { x: columns[id]!, y: 0 } : undefined);
+    const origin = Object.fromEntries(ids.filter((id) => at(id)).map((id) => [id, { x: at(id)!.x, y: at(id)!.y }]));
     const originVia = Object.fromEntries(Object.entries(l.edges).flatMap(([id, e2]) => (e2.via ? [[id, e2.via]] : [])));
     drag.current = { kind: 'nodes', ids, primary, start: toDiagram(e.clientX, e.clientY), before: l, origin, originVia, moved: false };
     capture(e);
@@ -374,7 +387,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD / k) return;
         d.moved = true;
         const primary = d.origin[d.primary];
-        if (primary && !e.altKey) {
+        const ordered = sceneRef.current?.kind === 'sequence';
+        if (ordered) dy = 0; // columns only move sideways
+        if (primary && !e.altKey && !ordered) {
           const moving = new Set(d.ids);
           const others = Object.entries(d.before.nodes)
             .filter(([id]) => !moving.has(id) && doc.diagram.nodes.some((n) => n.id === id))
@@ -386,7 +401,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         } else {
           setGuides([]);
         }
-        dirty.current = { nodes: new Set(d.ids), edges: new Set() };
+        // Lines that end on an enclosing container move with its border, so they count as dirty too.
+        dirty.current = { nodes: new Set([...d.ids, ...d.ids.flatMap((id) => ancestry(doc.diagram, doc.diagram.nodes.find((n) => n.id === id)?.parent))]), edges: new Set() };
         setLayout(moveNodes(d.before, doc.diagram, d.origin, d.originVia, Math.round(dx), Math.round(dy)));
         break;
       }
@@ -456,7 +472,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         break;
       case 'marquee':
         if (marquee && scene) {
-          setSelNodes(new Set(scene.nodes.filter((n) => overlaps(n.box, marquee)).map((n) => n.node.id)));
+          const candidates = scene.kind === 'graph' ? scene.nodes : scene.kind === 'sequence' ? scene.heads : [];
+          setSelNodes(new Set(candidates.filter((n) => overlaps(n.box, marquee)).map((n) => n.node.id)));
           setSelEdge(undefined);
         }
         setMarquee(null);
@@ -575,8 +592,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const highlightedLines = useMemo(() => {
     const lines = new Set<number>();
     if (!doc) return lines;
-    for (const n of doc.diagram.nodes) if (selNodes.has(n.id)) lines.add(n.line);
-    const edge = doc.diagram.edges.find((e) => e.id === selEdge);
+    const items = sourceItems(doc.diagram);
+    for (const n of items.nodes) if (selNodes.has(n.id)) lines.add(n.line);
+    const edge = items.edges.find((e) => e.id === selEdge);
     if (edge) lines.add(edge.line);
     return lines;
   }, [doc, selNodes, selEdge]);
@@ -584,8 +602,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const selectLine = useCallback(
     (line: number) => {
       if (!doc) return;
-      const nodes = doc.diagram.nodes.filter((n) => n.line === line).map((n) => n.id);
-      const edge = doc.diagram.edges.find((e) => e.line === line);
+      const items = sourceItems(doc.diagram);
+      const nodes = items.nodes.filter((n) => n.line === line).map((n) => n.id);
+      const edge = items.edges.find((e) => e.line === line);
       if (nodes.length) {
         setSelNodes(new Set(nodes));
         setSelEdge(undefined);
@@ -653,122 +672,202 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   return (
     <div className="app">
       <header className="toolbar">
-        <select value={file ?? ''} onChange={(e) => setFile(e.target.value)}>
-          {files.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
-        <button onClick={fit} title="Fit to window (F)">
-          Fit
-        </button>
-        <span className="sep" />
-        <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
-          Auto layout
-        </button>
-        <button onClick={() => void runLayout('reset')} title="Discard the layout and start over">
-          Reset
-        </button>
-        <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
-          Unpin
-        </button>
-        <button disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
-          Straighten
-        </button>
-        <span className="sep" />
-        <button onClick={undo} title="Undo (⌘Z)">
-          Undo
-        </button>
-        <button onClick={redo} title="Redo (⇧⌘Z)">
-          Redo
-        </button>
-        <span className="sep" />
-        <select value={layout.view?.theme ?? 'classic'} onChange={(e) => updateViewSettings({ theme: e.target.value })} title="Theme">
-          {Object.values(THEMES).map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={String(layout.view?.scale ?? 1)}
-          onChange={(e) => {
-            if (e.target.value === 'max') {
-              if (doc) updateViewSettings({ scale: largestScale(doc.diagram, { ...layoutRef.current, view: { ...layoutRef.current.view, scale: 1 } }) });
-              return;
-            }
-            updateViewSettings({ scale: Number(e.target.value) });
-          }}
-          title="Size of text, icons and shapes"
-        >
-          {[...new Set([...SIZES, layout.view?.scale ?? 1])].sort((a, b) => a - b).map((v) => (
-            <option key={v} value={String(v)}>
-              Size {Math.round(v * 100)}%
-            </option>
-          ))}
-          <option value="max">Largest that fits</option>
-        </select>
-        <Stepper label="Text" value={layout.view?.text ?? 1} onChange={(v) => updateViewSettings({ text: v })} title="Text size, on top of Size" />
-        <Stepper label="Icons" value={layout.view?.icons ?? 1} onChange={(v) => updateViewSettings({ icons: v })} title="Actor and system icon size, on top of Size" />
-        <select
-          value={frame ? `${frame[0]}:${frame[1]}` : ''}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (!v) return updateViewSettings({ frame: null });
-            if (v === 'window') {
-              const r = svgRef.current!.getBoundingClientRect();
-              return updateViewSettings({ frame: [Math.round(r.width), Math.round(r.height)] });
-            }
-            const [w, h] = v.split(':').map(Number);
-            updateViewSettings({ frame: [w!, h!] });
-          }}
-          title="Frame: the shape the diagram should fit"
-        >
-          <option value="">No frame</option>
-          {FRAME_PRESETS.map((p) => (
-            <option key={p.label} value={`${p.frame[0]}:${p.frame[1]}`}>
-              {p.label}
-            </option>
-          ))}
-          {frame && !FRAME_PRESETS.some((p) => p.frame[0] === frame[0] && p.frame[1] === frame[1]) && (
-            <option value={`${frame[0]}:${frame[1]}`}>
-              {frame[0]}:{frame[1]}
-            </option>
-          )}
-          <option value="window">This window</option>
-        </select>
-        <button disabled={!frame || !!busy?.endsWith('…')} onClick={() => void fitFrame()} title="Re-arrange everything to fill the frame (undoable)">
-          Fit to frame
-        </button>
-        <label className="toggle" title="Dotted grid behind the diagram">
-          <input
-            type="checkbox"
-            checked={grid}
-            onChange={(e) => {
-              setGrid(e.target.checked);
-              localStorage.setItem('puml-layout:grid', e.target.checked ? 'on' : 'off');
-            }}
-          />
-          Grid
-        </label>
-        <span className="sep" />
-        <button className={showSource ? 'active' : ''} onClick={() => toggleSource()} title="Show the source and layout.json (S)">
-          Source
-        </button>
-        <button onClick={exportSvg}>Export SVG</button>
-        <span className="spacer" />
-        {busy && <span className="busy">{busy}</span>}
-        <span className="meta">
-          {doc && `${doc.diagram.nodes.length} elements · ${doc.diagram.edges.length} lines · ${pinnedCount} pinned`}
-          {staleCount > 0 && ` · ${staleCount} stale in layout.json`}
-        </span>
-        {doc && doc.warnings.length > 0 && (
-          <button className="warn" onClick={() => setShowWarnings((s) => !s)}>
-            {doc.warnings.length} warning{doc.warnings.length > 1 ? 's' : ''}
-          </button>
-        )}
-        <span className={`status ${status}`}>{status === 'saving' ? 'saving…' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}</span>
+        <div className="deck-head">
+          <div className="nameplate">
+            <span className="nameplate-name">puml</span>
+            <span className="nameplate-model">Layout</span>
+          </div>
+          <label className="loaded" title="Diagram">
+            <span className="group-label">File</span>
+            <select className="file-select" value={file ?? ''} onChange={(e) => setFile(e.target.value)}>
+              {files.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="readout">
+            <span className="meta">
+              {doc && (
+                <>
+                  <span className="cell">
+                    <span className="num">{doc.diagram.nodes.length}</span> elements
+                  </span>
+                  <span className="cell">
+                    <span className="num">{doc.diagram.edges.length}</span> lines
+                  </span>
+                  <span className="cell">
+                    <span className="num">{pinnedCount}</span> pinned
+                  </span>
+                </>
+              )}
+              {staleCount > 0 && (
+                <span className="cell stale">
+                  <span className="num">{staleCount}</span> stale in layout.json
+                </span>
+              )}
+            </span>
+            {doc && doc.warnings.length > 0 && (
+              <button className="warn" aria-expanded={showWarnings} onClick={() => setShowWarnings((s) => !s)}>
+                <svg className="glyph" width="12" height="11" viewBox="0 0 12 11" aria-hidden="true">
+                  <path d="M6 0.5 11.5 10.5H0.5Z" />
+                </svg>
+                {doc.warnings.length} warning{doc.warnings.length > 1 ? 's' : ''}
+              </button>
+            )}
+            {busy && (
+              <span className="busy" role="status">
+                {busy}
+              </span>
+            )}
+            <span className={`status ${status}`} role="status">
+              {status === 'saving' ? 'saving…' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}
+            </span>
+          </div>
+        </div>
+        <div className="deck">
+          <div className="group" role="group" aria-label="Layout">
+            <span className="group-label" aria-hidden="true">
+              Layout
+            </span>
+            <div className="keys joined">
+              <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
+                Auto layout
+              </button>
+              <button onClick={() => void runLayout('reset')} title="Discard the layout and start over">
+                Reset
+              </button>
+              <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
+                Unpin
+              </button>
+              <button disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
+                Straighten
+              </button>
+            </div>
+          </div>
+          <div className="group" role="group" aria-label="History">
+            <span className="group-label" aria-hidden="true">
+              History
+            </span>
+            <div className="keys joined">
+              <button onClick={undo} title="Undo (⌘Z)">
+                Undo
+              </button>
+              <button onClick={redo} title="Redo (⇧⌘Z)">
+                Redo
+              </button>
+            </div>
+          </div>
+          <div className="group" role="group" aria-label="Appearance">
+            <span className="group-label" aria-hidden="true">
+              Appearance
+            </span>
+            <div className="keys">
+              <select className="theme-select" value={layout.view?.theme ?? 'classic'} onChange={(e) => updateViewSettings({ theme: e.target.value })} title="Theme">
+                {Object.values(THEMES).map((t) => (
+                  <option key={t.name} value={t.name}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="size-select"
+                value={String(layout.view?.scale ?? 1)}
+                onChange={(e) => {
+                  if (e.target.value === 'max') {
+                    if (doc) updateViewSettings({ scale: largestScale(doc.diagram, { ...layoutRef.current, view: { ...layoutRef.current.view, scale: 1 } }) });
+                    return;
+                  }
+                  updateViewSettings({ scale: Number(e.target.value) });
+                }}
+                title="Size of text, icons and shapes"
+              >
+                {[...new Set([...SIZES, layout.view?.scale ?? 1])].sort((a, b) => a - b).map((v) => (
+                  <option key={v} value={String(v)}>
+                    Size {Math.round(v * 100)}%
+                  </option>
+                ))}
+                {!doc?.diagram.special && <option value="max">Largest that fits</option>}
+              </select>
+              <Stepper label="Text" value={layout.view?.text ?? 1} onChange={(v) => updateViewSettings({ text: v })} title="Text size, on top of Size" />
+              <Stepper label="Icons" value={layout.view?.icons ?? 1} onChange={(v) => updateViewSettings({ icons: v })} title="Actor and system icon size, on top of Size" />
+            </div>
+          </div>
+          <div className="group" role="group" aria-label="Frame and fit">
+            <span className="group-label" aria-hidden="true">
+              Frame &amp; fit
+            </span>
+            <div className="keys">
+              <select
+                className="frame-select"
+                value={frame ? `${frame[0]}:${frame[1]}` : ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return updateViewSettings({ frame: null });
+                  if (v === 'window') {
+                    const r = svgRef.current!.getBoundingClientRect();
+                    return updateViewSettings({ frame: [Math.round(r.width), Math.round(r.height)] });
+                  }
+                  const [w, h] = v.split(':').map(Number);
+                  updateViewSettings({ frame: [w!, h!] });
+                }}
+                title="Frame: the shape the diagram should fit"
+              >
+                <option value="">No frame</option>
+                {FRAME_PRESETS.map((p) => (
+                  <option key={p.label} value={`${p.frame[0]}:${p.frame[1]}`}>
+                    {p.label}
+                  </option>
+                ))}
+                {frame && !FRAME_PRESETS.some((p) => p.frame[0] === frame[0] && p.frame[1] === frame[1]) && (
+                  <option value={`${frame[0]}:${frame[1]}`}>
+                    {frame[0]}:{frame[1]}
+                  </option>
+                )}
+                <option value="window">This window</option>
+              </select>
+              <button disabled={!frame || !!busy?.endsWith('…')} onClick={() => void fitFrame()} title="Re-arrange everything to fill the frame (undoable)">
+                Fit to frame
+              </button>
+            </div>
+          </div>
+          <div className="group" role="group" aria-label="View">
+            <span className="group-label" aria-hidden="true">
+              View
+            </span>
+            <div className="keys">
+              <button onClick={fit} title="Fit the diagram to the window (F)">
+                Fit view
+              </button>
+              <label className="toggle" title="Dotted grid behind the diagram">
+                <input
+                  type="checkbox"
+                  checked={grid}
+                  onChange={(e) => {
+                    setGrid(e.target.checked);
+                    localStorage.setItem('puml-layout:grid', e.target.checked ? 'on' : 'off');
+                  }}
+                />
+                Grid
+              </label>
+              <button className={`switch${showSource ? ' active' : ''}`} aria-pressed={showSource} onClick={() => toggleSource()} title="Show the source and layout.json (S)">
+                <span className="lamp" aria-hidden="true" />
+                Source
+              </button>
+            </div>
+          </div>
+          <div className="group group-export" role="group" aria-label="Export">
+            <span className="group-label" aria-hidden="true">
+              Export
+            </span>
+            <div className="keys">
+              <button className="primary" onClick={exportSvg} title="Download the laid-out diagram as SVG">
+                Export SVG
+              </button>
+            </div>
+          </div>
+        </div>
       </header>
       {error && <div className="error">{error}</div>}
       {showWarnings && doc && (
@@ -792,7 +891,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       >
         <defs>
           <pattern id="grid" width={20 * view.k} height={20 * view.k} x={view.x} y={view.y} patternUnits="userSpaceOnUse">
-            <circle cx={1} cy={1} r={1} fill="#D9DCE1" />
+            <circle cx={1} cy={1} r={1} fill="#CFCBC2" />
           </pattern>
         </defs>
         {grid && <rect width="100%" height="100%" fill="url(#grid)" />}
@@ -805,7 +904,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               </text>
             </g>
           )}
-          {scene && <DiagramContent scene={scene} ix={stableIx} />}
+          {scene && <AnyContent scene={scene} ix={stableIx} />}
           {frameBox && <rect className="frame-border" x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} />}
           {guides.map((g, i) =>
             g.axis === 'x' ? (
@@ -829,9 +928,30 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       )}
       </div>
       <footer className="help">
-        Drag elements · drag a box title to move the box · pull a line to bend it, double-click a bend to remove it · drag labels ·
-        shift-click / shift-drag to multi-select · Alt disables snapping · drag background to pan, pinch or ⌘-scroll to zoom · U unpin
-        · ⌘Z undo
+        <span className="hint">
+          <b>Move</b> drag elements, labels, box titles
+        </span>
+        <span className="hint">
+          <b>Bend</b> pull a line; double-click a bend to remove
+        </span>
+        <span className="hint">
+          <b>Select</b> <kbd>⇧</kbd> click or drag
+        </span>
+        <span className="hint">
+          <b>No snap</b> <kbd>Alt</kbd>
+        </span>
+        <span className="hint">
+          <b>Pan</b> drag background
+        </span>
+        <span className="hint">
+          <b>Zoom</b> pinch, <kbd>⌘</kbd> scroll
+        </span>
+        <span className="hint">
+          <b>Unpin</b> <kbd>U</kbd>
+        </span>
+        <span className="hint">
+          <b>Undo</b> <kbd>⌘Z</kbd>
+        </span>
       </footer>
     </div>
   );

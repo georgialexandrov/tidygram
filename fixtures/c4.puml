@@ -1,0 +1,23 @@
+@startuml c4
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+Person(customer, "Customer", "Buys things online")
+Person_Ext(support, "Support Agent", "Handles refunds")
+System_Boundary(shop, "Online Shop") {
+  Container(web, "Web App", "React", "Catalogue and checkout")
+  Container(api, "API", "NestJS", "Orders, payments, accounts")
+  ContainerDb(db, "Database", "PostgreSQL", "Orders and customers")
+  ContainerQueue(bus, "Event Bus", "Kafka", "Order events")
+  Container(worker, "Fulfilment Worker", "Go", "Picks, packs, ships")
+}
+System_Ext(stripe, "Stripe", "Card payments")
+System_Ext(mail, "Mail Provider", "Transactional email")
+Rel(customer, web, "Uses", "HTTPS")
+Rel(web, api, "Calls", "JSON/HTTPS")
+Rel(api, db, "Reads/writes", "SQL")
+Rel(api, bus, "Publishes")
+Rel(bus, worker, "Delivers")
+Rel(api, stripe, "Charges", "HTTPS")
+Rel(worker, mail, "Sends", "SMTP")
+Rel(support, api, "Refunds")
+@enduml

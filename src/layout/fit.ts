@@ -1,4 +1,5 @@
 import type { Diagram } from '../model/types.ts';
+import { buildAnyScene } from '../scene/any.ts';
 import type { Avoid } from '../scene/avoid.ts';
 import { buildScene } from '../scene/scene.ts';
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
@@ -140,11 +141,51 @@ export function countCrossings(lines: Point[][]): number {
   return crossings;
 }
 
+/**
+ * Ordered diagrams (sequence, Gantt, timing) have no free positions, only gaps: search size × column gap × row gap and keep
+ * the combination whose text ends up largest in the frame. Dragged columns are released.
+ */
+function fitOrdered(diagram: Diagram, layout: LayoutFile, frame: Point): FitResult {
+  const started = performance.now();
+  const ratio = frame[0] / frame[1];
+  let best: { score: number; view: NonNullable<LayoutFile['view']>; achieved: number; fill: number; name: string } | undefined;
+  let tried = 0;
+  for (const scale of [1, 1.4, 1.8, 2.4]) {
+    for (const gx of [1, 1.5, 2.2, 3.2, 4.5]) {
+      for (const gy of [1, 1.4, 2, 2.8]) {
+        tried++;
+        const view = { ...layout.view, frame, scale, spacing: [gx, gy] as Point };
+        const b = buildAnyScene(diagram, { ...layout, view, nodes: {} }, undefined).bounds;
+        const frameW = Math.max(b.w, b.h * ratio);
+        // Text size as it lands in the frame, with a small bonus for actually using the frame.
+        const fill = (b.w * b.h) / (frameW * (frameW / ratio));
+        const score = Math.log(scale / frameW) + 0.15 * Math.log(fill);
+        if (!best || score > best.score) best = { score, view, achieved: b.w / b.h, fill, name: `size ${Math.round(scale * 100)}%, gaps ${gx}×/${gy}×` };
+      }
+    }
+  }
+  const view = { ...best!.view };
+  if (view.scale === 1) delete view.scale;
+  if (view.spacing![0] === 1 && view.spacing![1] === 1) delete view.spacing;
+  return {
+    layout: { ...layout, view, nodes: {}, edges: {} },
+    achieved: best!.achieved,
+    scale: best!.view.scale ?? 1,
+    fill: best!.fill,
+    variant: best!.name,
+    tried,
+    timings: { layout: Math.round(performance.now() - started), route: 0, scale: 0 },
+  };
+}
+
 export async function fitToFrame(diagram: Diagram, layout: LayoutFile, frame: Point, avoid?: Avoid): Promise<FitResult> {
+  if (diagram.special) return fitOrdered(diagram, layout, frame);
   const ratio = frame[0] / frame[1];
   const theme = themeFor(layout.view?.theme);
   const shapes = shapesFor(diagram, theme);
-  const edges = diagram.edges.filter((e) => e.from !== e.to);
+  const nodeIds = new Set(diagram.nodes.map((n) => n.id));
+  // Lines to containers (composite states, boundaries) have no node position to score with.
+  const edges = diagram.edges.filter((e) => e.from !== e.to && nodeIds.has(e.from) && nodeIds.has(e.to));
   const list = candidates(diagram, theme, layout.view);
 
   // Pass 1: lay out every candidate and score it cheaply (density, straight-line length and crossings).

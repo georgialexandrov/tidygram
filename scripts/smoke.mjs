@@ -117,6 +117,7 @@ try {
   const gridShown = await evaluate(`!!document.querySelector('rect[fill="url(#grid)"]')`);
 
   // 5. Text +2 steps, icons +1, source panel shows the selected element's line.
+  const beforeSteps = JSON.parse(readFileSync(LAYOUT, 'utf8')).view ?? {};
   const clickLabel = (label) => evaluate(`document.querySelector('[aria-label="${label}"]').click()`);
   await clickLabel('Larger text');
   await sleep(150);
@@ -165,8 +166,8 @@ try {
     afterFit.view?.frame?.join(':') === '16:9' &&
     fitted &&
     !gridShown &&
-    afterSteps.view?.text === 1.2 &&
-    afterSteps.view?.icons === 1.1 &&
+    Math.abs((afterSteps.view?.text ?? 1) - Math.min(3, (beforeSteps.text ?? 1) + 0.2)) < 0.01 &&
+    Math.abs((afterSteps.view?.icons ?? 1) - Math.min(3, (beforeSteps.icons ?? 1) + 0.1)) < 0.01 &&
     highlighted.length === 1 &&
     highlighted[0].includes('UC_Login') &&
     logs.length === 0;
