@@ -1,7 +1,7 @@
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk.bundled.js';
 import { elk } from './elk.ts';
 import type { DNode, Diagram } from '../model/types.ts';
-import { ancestry, containerBoxes, nodeBox, overlaps, type Box, type Positions } from '../scene/containers.ts';
+import { ancestry, containerBoxes, nodeBox, overlaps, sourceCentre, type Box, type Positions } from '../scene/containers.ts';
 import { containerPad, nodeShape, type NodeShape, type Pad } from '../scene/shapes.ts';
 import { measureText } from '../scene/measure.ts';
 import { themeFor, themeOf, type Theme } from '../scene/theme.ts';
@@ -227,12 +227,42 @@ export function placeMissing(diagram: Diagram, positions: Positions, shapes: Map
 }
 
 export type LayoutMode =
-  /** Keep every stored position, place only new nodes. */
+  /** Keep every stored position, place only new nodes (draw.io: where the file draws them). */
   | 'fill'
   /** Re-run auto layout for everything except pinned nodes. */
   | 'auto'
-  /** Discard the stored layout and start over. */
+  /** Discard the stored layout and start over (draw.io: from the file's layout, not ELK). */
   | 'reset';
+
+/** True when the source carries its own layout (draw.io), which then replaces ELK as the starting point. */
+export function hasSourceLayout(diagram: Diagram): boolean {
+  return diagram.nodes.some((n) => n.sourceBox);
+}
+
+/**
+ * Seeds positions from the file (draw.io): every node in `ids` that has a
+ * source box goes where the file draws it. Lines whose ends are all new get
+ * the file's waypoints; a line between nodes that were already placed keeps
+ * whatever the sidecar says, so straightening one sticks across reloads.
+ */
+function seedFromSource(diagram: Diagram, next: LayoutFile, shapes: Map<string, NodeShape>, pad: Pad, ids: Set<string>, firstTime: boolean) {
+  const positions: Positions = Object.fromEntries(diagram.nodes.filter((n) => next.nodes[n.id]).map((n) => [n.id, next.nodes[n.id]!]));
+  const seeded = new Set<string>();
+  for (const n of diagram.nodes) {
+    if (!ids.has(n.id)) continue;
+    const home = sourceCentre(n, shapes.get(n.id)!);
+    if (!home) continue;
+    positions[n.id] = home;
+    seeded.add(n.id);
+  }
+  const placed = placeMissing(diagram, positions, shapes, pad);
+  for (const n of diagram.nodes) if (!next.nodes[n.id]) next.nodes[n.id] = { x: placed[n.id]!.x, y: placed[n.id]!.y };
+  // Containers have no entries of their own: their ends count as new only on the first layout.
+  const fresh = (id: string) => seeded.has(id) || (firstTime && diagram.containers.some((c) => c.id === id));
+  for (const e of diagram.edges) {
+    if (e.sourceVia && !next.edges[e.id] && fresh(e.from) && fresh(e.to)) next.edges[e.id] = { via: e.sourceVia.map(([x, y]) => [x, y]) };
+  }
+}
 
 export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: LayoutMode = 'fill'): Promise<LayoutFile> {
   // Ordered diagrams (sequence, ...) compute their layout on every build; only dragged columns are stored.
@@ -242,6 +272,16 @@ export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: L
   const pad = containerPad(theme);
   const known = diagram.nodes.filter((n) => layout.nodes[n.id]);
   const next: LayoutFile = { ...layout, nodes: { ...layout.nodes }, edges: { ...layout.edges } };
+
+  if (hasSourceLayout(diagram) && mode !== 'auto') {
+    if (mode === 'reset') {
+      next.nodes = {};
+      next.edges = {};
+    }
+    const missing = new Set(diagram.nodes.filter((n) => !next.nodes[n.id]).map((n) => n.id));
+    seedFromSource(diagram, next, shapes, pad, missing, mode === 'reset' || known.length === 0);
+    return next;
+  }
 
   if (mode === 'fill' && known.length > 0) {
     const current: Positions = Object.fromEntries(known.map((n) => [n.id, layout.nodes[n.id]!]));

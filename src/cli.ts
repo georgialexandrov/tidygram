@@ -15,14 +15,14 @@ import { largestScale } from './layout/scale.ts';
 import { buildAnyScene } from './scene/any.ts';
 import { DIAGRAM_FILE, layoutPathFor } from './paths.ts';
 
-const USAGE = `Usage: pnpm render <diagram.puml|diagram.mmd> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
+const USAGE = `Usage: pnpm render <diagram.puml|.mmd|.drawio> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
 
-Reads diagram.layout.json next to the .puml or .mmd (if any), places nodes that have no
-position yet, routes the lines and writes an SVG. The completed layout is written
+Reads diagram.layout.json next to the diagram (if any), places nodes that have no
+position yet (draw.io: where the file draws them), routes the lines and writes an SVG. The completed layout is written
 back unless --no-write is given.
 
   --relayout   auto-layout everything except pinned nodes
-  --reset      discard the stored layout and start over
+  --reset      discard the stored layout and start over (draw.io: back to the file's layout)
   --fit W:H    re-arrange to fill a frame of that aspect ratio (16:9, 1:1, 210:297)
   --theme X    ${Object.keys(THEMES).join(' | ')} (stored in the layout file)
   --scale N    size of text and icons (1 = 100%), or "max" for the largest that fits`;

@@ -1,15 +1,18 @@
 // Opens every fixture in the running editor (pnpm dev) and checks it renders without errors;
 // drags a sequence participant and checks the column is stored. Restores layout files after.
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { withChrome, sleep } from './cdp.mjs';
 
 const dir = new URL('../fixtures/', import.meta.url);
-// Mermaid fixtures live in their own folder: `class.mmd` next to `class.puml` would share `class.layout.json`.
+// Mermaid and draw.io fixtures live in their own folders: `class.mmd` or `er.drawio` next to
+// `class.puml`/`er.puml` would share one sidecar.
 const files = [
   ...readdirSync(dir).filter((f) => /\.(puml|mmd)$/.test(f)).sort(),
   ...readdirSync(new URL('mermaid/', dir)).filter((f) => /\.mmd$/.test(f)).sort().map((f) => `mermaid/${f}`),
+  ...readdirSync(new URL('drawio/', dir)).filter((f) => /\.drawio(\.xml)?$/.test(f)).sort().map((f) => `drawio/${f}`),
 ];
-const layoutOf = (f) => new URL(f.replace(/\.\w+$/, '.layout.json'), dir);
+const layoutOf = (f) => new URL(f.replace(/(\.drawio)?\.\w+$/, '.layout.json'), dir);
 const saved = new Map(files.map((f) => [f, existsSync(layoutOf(f)) ? readFileSync(layoutOf(f), 'utf8') : null]));
 
 let ok = true;
@@ -23,7 +26,10 @@ try {
       ok &&= pass;
       console.log(`${pass ? 'ok  ' : 'FAIL'} ${f.padEnd(22)} ${count[0]} elements, ${count[1]} lines${count[2] ? `, ${count[2]}` : ''}${nan ? ', NaN in SVG' : ''}${errors.length ? `, errors: ${errors.join(' | ')}` : ''}`);
       errors.length = 0;
-      if (process.argv[2]) writeFileSync(`${process.argv[2]}/${f}.png`, await screenshot());
+      if (process.argv[2]) {
+        mkdirSync(dirname(`${process.argv[2]}/${f}`), { recursive: true });
+        writeFileSync(`${process.argv[2]}/${f}.png`, await screenshot());
+      }
     }
 
     // Sequence: drag the last participant to the far left; it should become the first column.

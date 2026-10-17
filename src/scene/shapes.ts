@@ -66,8 +66,78 @@ const wrap = (text: string, width = 34) =>
     })
     .join('\n');
 
-/** Size of a node's whole box (what layout positions refer to, by centre). */
+/**
+ * Size of a node's whole box (what layout positions refer to, by centre).
+ * Nodes with a `sourceBox` (draw.io) keep the file's size; see `fileSized`.
+ */
 export function nodeShape(node: DNode, theme: Theme): NodeShape {
+  if (!node.sourceBox || FREE_SIZE.has(node.kind)) return themedShape(node, theme);
+  const label = node.wrap ? wrapToWidth(node, theme) : node.label;
+  return fileSized(themedShape(label === node.label ? node : { ...node, label }, theme), node, theme);
+}
+
+/** Icon kinds draw a figure of the theme's size with the label underneath; a file box can't size them. */
+const FREE_SIZE = new Set<NodeKind>([...ICON_KINDS, 'actor']);
+
+/** How much of a file box's width text may use, by outline: ellipses and diamonds narrow towards the edges. */
+const TEXT_SHARE: Record<Anchor['shape'], number> = { rect: 1, pill: 0.85, ellipse: 0.75, diamond: 0.55 };
+
+/**
+ * draw.io sizes boxes deliberately, so the file's width and height (times
+ * the view scale) are the element's size. They only grow where the theme's
+ * text, which is not draw.io's font, needs more room: text plus a small
+ * margin, not the theme's minimum box size.
+ */
+function fileSized(shape: NodeShape, node: DNode, theme: Theme): NodeShape {
+  const k = theme.scale;
+  const box = node.sourceBox!;
+  const extra = BOX_EXTRA[node.kind] ?? {};
+  // Kinds with outline extras (cloud bumps, cylinder caps) already reserve their margins.
+  const share = extra.left || extra.right || extra.top ? 1 : TEXT_SHARE[shape.anchor.shape];
+  let needW: number;
+  let needH: number;
+  if (shape.compartments) {
+    needW = Math.max(shape.text.width + 28 * k, ...shape.compartments.map((c) => c.width + 24 * k));
+    needH = shape.h;
+  } else {
+    const blocks = [shape.stereo, shape.text, shape.tech, shape.desc].filter((b): b is TextBlock => !!b);
+    const textW = Math.max(0, ...blocks.map((b) => b.width));
+    const textH = blocks.reduce((sum, b) => sum + b.height, 0);
+    needW = textW / share + (12 + (extra.left ?? 0) + (extra.right ?? 0)) * k;
+    needH = textH / (share === 1 ? 1 : share + 0.15) + (6 + (extra.top ?? 0) + (extra.bottom ?? 0)) * k;
+  }
+  const w = Math.ceil(Math.max(box.w * k, needW));
+  const h = Math.ceil(Math.max(box.h * k, needH));
+  return { ...shape, w, h, anchor: { ...shape.anchor, dx: 0, dy: 0, w, h } };
+}
+
+/** draw.io `whiteSpace=wrap`: break the label into lines that fit the file box, as draw.io does. */
+function wrapToWidth(node: DNode, theme: Theme): string {
+  const k = theme.scale;
+  const shapeOf = node.kind === 'attribute' ? 'ellipse' : node.kind === 'relationship' ? 'diamond' : 'rect';
+  // draw.io wraps to nearly the whole box even in ellipses and diamonds; it lets text touch the outline.
+  const room = node.sourceBox!.w * k * Math.min(1, TEXT_SHARE[shapeOf] + 0.2) - 12 * k;
+  const size = node.kind === 'attribute' ? theme.size.note : theme.size.node;
+  const width = (t: string) => measureText(t, size, false, theme.widthFactor).width;
+  return node.label
+    .split('\n')
+    .flatMap((line) => {
+      const out: string[] = [];
+      let current = '';
+      for (const word of line.split(' ')) {
+        const next = current ? `${current} ${word}` : word;
+        if (current && width(next) > room) {
+          out.push(current);
+          current = word;
+        } else current = next;
+      }
+      out.push(current);
+      return out;
+    })
+    .join('\n');
+}
+
+function themedShape(node: DNode, theme: Theme): NodeShape {
   const k = theme.scale;
   const strong = (theme.nodeWeight ?? 400) >= 500;
   const measure = (text: string, size: number, bold = false) => measureText(text, size, bold, theme.widthFactor);

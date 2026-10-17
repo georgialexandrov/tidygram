@@ -1,0 +1,110 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0" version="24.7.17">
+  <diagram id="order-flow" name="Order flow">
+    <mxGraphModel dx="1426" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="&lt;b&gt;Order flow&lt;/b&gt; v2" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="140" y="0" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="customer" value="Customer" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="140" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-shop" value="Shop" style="swimlane;whiteSpace=wrap;html=1;startSize=23;" vertex="1" parent="1">
+          <mxGeometry x="140" y="40" width="520" height="320" as="geometry" />
+        </mxCell>
+        <mxCell id="start" value="Start" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="lane-shop">
+          <mxGeometry x="20" y="50" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="receive" value="Receive&lt;br&gt;order" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="lane-shop">
+          <mxGeometry x="150" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="in-stock" value="In stock?" style="rhombus;whiteSpace=wrap;html=1;" vertex="1" parent="lane-shop">
+          <mxGeometry x="150" y="130" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="reserve" value="&lt;div&gt;Reserve&lt;/div&gt;&lt;div&gt;items&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="lane-shop">
+          <mxGeometry x="150" y="245" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="payment" value="Payment" style="rounded=0;whiteSpace=wrap;html=1;container=1;collapsible=0;verticalAlign=top;" vertex="1" parent="lane-shop">
+          <mxGeometry x="320" y="40" width="170" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="charge" value="Charge card" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="payment">
+          <mxGeometry x="20" y="40" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="receipt" value="Send&amp;nbsp;receipt" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="payment">
+          <mxGeometry x="20" y="170" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-wh" value="Warehouse" style="swimlane;whiteSpace=wrap;html=1;startSize=23;" vertex="1" parent="1">
+          <mxGeometry x="140" y="400" width="520" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="pick" value="Pick &amp;amp; pack" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="lane-wh">
+          <mxGeometry x="150" y="60" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="stock-db" value="Stock DB" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;" vertex="1" parent="lane-wh">
+          <mxGeometry x="350" y="50" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="end" value="End" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" vertex="1" parent="1">
+          <mxGeometry x="740" y="130" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="email" value="Email service" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="710" y="250" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="ship-note" value="Ships within&#xa;24 hours" style="shape=note;whiteSpace=wrap;size=14;" vertex="1" parent="1">
+          <mxGeometry x="710" y="460" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e-places" value="places" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="customer" target="start">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="lane-shop" source="start" target="receive">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-check" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="lane-shop" source="receive" target="in-stock">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-yes" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="lane-shop" source="in-stock" target="reserve">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-no" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="in-stock" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="440" y="210" />
+              <mxPoint x="440" y="20" />
+              <mxPoint x="770" y="20" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-pay" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="lane-shop" source="reserve" target="charge">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="270" />
+              <mxPoint x="300" y="105" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="payment" source="charge" target="receipt">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-mail" value="async" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="receipt" target="email">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-done" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="receipt" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="680" y="275" />
+              <mxPoint x="680" y="160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-ship" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="reserve" target="pick">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-stock" value="update" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=classic;startFill=1;" edge="1" parent="lane-wh" source="pick" target="stock-db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-note" style="rounded=0;html=1;dashed=1;endArrow=none;" edge="1" parent="1" source="ship-note" target="pick">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

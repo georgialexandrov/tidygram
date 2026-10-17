@@ -1,10 +1,24 @@
-import { readFileSync, readdirSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, readdirSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import type { Plugin } from 'vite';
 import { DIAGRAM_FILE, layoutPathFor } from '../paths.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist']);
+
+/** A plain `.xml` is only a diagram when it is draw.io XML; peek at its head rather than list every pom.xml. */
+function isDiagram(full: string): boolean {
+  if (!DIAGRAM_FILE.test(full)) return false;
+  if (!/\.xml$/i.test(full) || /\.drawio\.xml$/i.test(full)) return true;
+  const fd = openSync(full, 'r');
+  try {
+    const head = Buffer.alloc(2048);
+    const n = readSync(fd, head, 0, head.length, 0);
+    return /<(mxfile|mxGraphModel)\b/.test(head.subarray(0, n).toString('utf8'));
+  } finally {
+    closeSync(fd);
+  }
+}
 
 function listPuml(root: string, dir = root, depth = 0): string[] {
   if (depth > 5) return [];
@@ -13,7 +27,7 @@ function listPuml(root: string, dir = root, depth = 0): string[] {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) found.push(...listPuml(root, full, depth + 1));
-    else if (DIAGRAM_FILE.test(entry.name)) found.push(relative(root, full));
+    else if (isDiagram(full)) found.push(relative(root, full));
   }
   return found.sort();
 }
@@ -28,7 +42,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 /**
- * File access for the editor: lists .puml and .mmd files under `root`, reads a diagram
+ * File access for the editor: lists .puml, .mmd and draw.io files under `root`, reads a diagram
  * with its layout, writes the layout back, and pushes a `puml:changed` event
  * when either file changes on disk (an agent editing the text, say).
  */
@@ -39,7 +53,7 @@ export function pumlFiles(root: string): Plugin {
   const resolveFile = (file: string | null): string | undefined => {
     if (!file || !DIAGRAM_FILE.test(file)) return undefined;
     const full = resolve(base, file);
-    return full.startsWith(base + sep) && existsSync(full) && statSync(full).isFile() ? full : undefined;
+    return full.startsWith(base + sep) && existsSync(full) && statSync(full).isFile() && isDiagram(full) ? full : undefined;
   };
 
   return {
@@ -50,7 +64,7 @@ export function pumlFiles(root: string): Plugin {
         const full = resolve(path);
         if (!full.startsWith(base + sep)) return;
         const isLayout = full.endsWith('.layout.json');
-        if (!isLayout && !DIAGRAM_FILE.test(full)) return;
+        if (!isLayout && !(existsSync(full) && isDiagram(full))) return;
         // Ignore the echo of our own layout writes.
         if (isLayout && existsSync(full) && readFileSync(full, 'utf8') === lastWritten.get(full)) return;
         const puml = isLayout ? listPuml(base).find((f) => layoutPathFor(resolve(base, f)) === full) : relative(base, full);

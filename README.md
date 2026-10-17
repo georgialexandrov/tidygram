@@ -1,7 +1,7 @@
 # puml-layout
 
 Make diagrams you don't own look right, without touching them. The source
-(`diagram.puml`) stays exactly as its author wrote it; everything you change
+(`diagram.puml`, `.mmd` or `.drawio`) stays exactly as its author wrote it; everything you change
 lives in a sidecar, `diagram.layout.json`, keyed by the element ids in the
 source. When the author edits the source, your positions survive and new
 elements are placed next to what they connect to.
@@ -51,6 +51,47 @@ sidecar works the same way.
 | Gantt | ✅ dateFormat, sections, `excludes weekends`/weekdays, `weekend friday`, ids, `after a b`, `until x`, durations d/w/h, end dates (exclusive unless `inclusiveEndDates`), done/crit/milestone; excluded dates are reported, not drawn | `gantt.mmd` |
 | Mindmap | ✅ indentation tree; all node shapes drawn as topics; icons and classes ignored | `mindmap.mmd` |
 | Pie, journey, gitGraph, timeline, quadrant, XY, sankey, requirement, C4, block, packet, architecture, kanban, ... | recognised and reported; no layout to manage | |
+
+## draw.io
+
+`.drawio`, `.drawio.xml`, or any `.xml` holding `<mxfile>`/`<mxGraphModel>`
+(fixtures in `fixtures/drawio/`). The file is recognised by its content,
+whatever it is called. Ids are the mxCell ids, which draw.io keeps stable;
+line ids are the edge cell ids.
+
+**The file's layout is the default layout.** A draw.io file already has
+hand-made geometry, so an element with no sidecar entry sits where the
+author put it, at the author's size, and lines get the author's waypoints
+as `via`. ELK only runs when you ask: **Auto layout** (and Fit to frame)
+still lays out with ELK; **Reset** (`--reset`) goes back to the file's
+layout, not to ELK. Positions in the sidecar are in the file's coordinates.
+
+| | |
+|---|---|
+| Pages | the first `<diagram>` page; a warning names the others |
+| Compression | inline `<mxGraphModel>` and compressed pages (base64 + raw deflate + URI-encoding), decoded by a built-in inflater (`src/model/inflate.ts`), no dependency |
+| Containers | any cell with children: `swimlane`, `container=1`, labelled groups; nested, child geometry made absolute. Unlabelled `group` cells are invisible in draw.io and are flattened (unless a line points at one) |
+| Tables | ER entities (stack-layout swimlane of text rows) and `shape=table` become entity boxes with their rows; lines to a row attach to the table |
+| Shapes | rectangle, `rounded=1` (rounded box), `ellipse` (ellipse, a circle when square), `rhombus` (diamond), `cylinder*`/`datastore` (database), `umlActor`, `cloud`, `hexagon`, `process`/`step` (PlantUML's process outline), `note`, `document` (file), `card`, `folder`, `component`, `cube` (node), `text` (label), common `mxgraph.flowchart.*`; parallelogram, trapezoid, lifeline and similar as plain boxes. Other stencils (`mxgraph.aws4.*`, images, ...) become boxes with their label, reported in one warning |
+| Labels | `html=1` labels lose their tags (`<br>`, `<div>`, `<p>` become line breaks), entities decoded; `UserObject`/`object` wrappers give the label and id; `edgeLabel` children attach to their line (near the source end, middle, near the target end) |
+| Arrows | `endArrow`/`startArrow` with `endFill`/`startFill`: classic/open/block (hollow block = triangle), diamond/diamondThin (filled or not), oval, cross, box, none, and ER `ERone`/`ERmandOne`/`ERmany`/`ERzeroToOne`/`ERzeroToMany`/`ERoneToMany`; `dashed=1` |
+| Skipped | lines with a loose end (only `sourcePoint`/`targetPoint`) or to another line, each with a warning; hidden cells |
+
+Sizes: a box keeps the file's width and height (times the view's Size) and
+only grows when the theme's text, which is not draw.io's font, needs more
+room. `whiteSpace=wrap` labels wrap to the box width. Actors keep the
+theme's figure; the figure sits on the file box with the label underneath.
+A container keeps its file box while its contents stay in place or move
+together (dragging it by the title); once they are rearranged it fits them
+like any other container.
+
+Ignored: colours, fonts, label positions and offsets, edge styles (lines are
+always routed orthogonally through the waypoints, so a straight diagonal
+line in draw.io becomes an orthogonal one), rotation, and horizontal
+swimlane headers (titles are always on top). Themes own the look.
+
+Like Mermaid, `x.drawio` next to `x.puml` would share `x.layout.json`; keep
+them in different folders.
 
 The parsers feed one format-neutral model (`src/model/types.ts`), so a new
 input is a new parser.

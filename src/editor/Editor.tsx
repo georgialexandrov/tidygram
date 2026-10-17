@@ -3,7 +3,7 @@ import { perf } from './perf.ts';
 import { SourcePanel } from './SourcePanel.tsx';
 import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ensureLayout, type LayoutMode } from '../layout/auto.ts';
+import { ensureLayout, hasSourceLayout, type LayoutMode } from '../layout/auto.ts';
 import { emptyLayout, parseLayout, serializeLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
 import { parseDiagram } from '../model/diagram.ts';
 import type { Diagram, ParseWarning } from '../model/types.ts';
@@ -546,7 +546,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const runLayout = useCallback(
     async (mode: LayoutMode) => {
       if (!doc) return;
-      if (mode === 'reset' && !confirm('Discard all positions, pins and bends, and lay out from scratch?')) return;
+      // draw.io files carry their own layout; Reset goes back to it rather than to ELK.
+      const fromFile = hasSourceLayout(doc.diagram);
+      if (mode === 'reset' && !confirm(fromFile ? "Discard all positions, pins and bends, and go back to the file's layout?" : 'Discard all positions, pins and bends, and lay out from scratch?')) return;
       commit(await ensureLayout(doc.diagram, layoutRef.current, mode));
     },
     [doc, commit],
@@ -796,7 +798,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
             Auto layout
           </button>
-          <button onClick={() => void runLayout('reset')} title="Discard the layout and start over">
+          <button onClick={() => void runLayout('reset')} title={doc && hasSourceLayout(doc.diagram) ? "Discard the layout and go back to the file's" : 'Discard the layout and start over'}>
             Reset
           </button>
           <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">

@@ -1,7 +1,22 @@
 /**
- * Format-neutral diagram model. Parsers (PlantUML today, Mermaid next) produce
+ * Format-neutral diagram model. Parsers (PlantUML, Mermaid, draw.io) produce
  * this; layout, routing and rendering only ever see this.
  */
+
+/**
+ * A box in source coordinates: top-left corner and size, absolute (nested
+ * draw.io geometry already resolved). Formats that carry a hand-made layout
+ * (draw.io) set `sourceBox`/`sourceVia`; it is the default layout:
+ * `ensureLayout` puts an element without a sidecar entry there, and Reset
+ * returns to it (Auto layout still means ELK). Positions in the sidecar are
+ * in the same coordinates.
+ */
+export interface SourceBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 /** Which PlantUML family the source belongs to; decides how ambiguous keywords read. */
 export type DiagramFamily = 'description' | 'class' | 'state' | 'c4' | 'mindmap' | 'wbs' | 'activity' | 'json' | 'chen' | 'network' | 'archimate';
@@ -87,6 +102,15 @@ export interface DNode {
   /** Chen notation: key attribute (underlined) and derived attribute (dashed outline). */
   key?: boolean;
   derived?: boolean;
+  /**
+   * Where the source draws it (draw.io). Also fixes the size: the box keeps
+   * the file's width and height (times the view scale) and only grows when
+   * the theme's text needs more room. Icon kinds (actors) keep their
+   * figure size; the figure is centred on the box.
+   */
+  sourceBox?: SourceBox;
+  /** Label may wrap to the box width (draw.io `whiteSpace=wrap`); only with `sourceBox`. */
+  wrap?: boolean;
   line: number;
 }
 
@@ -96,6 +120,12 @@ export interface DContainer {
   label: string;
   parent?: string;
   stereotype?: string;
+  /**
+   * The container's box in the source (draw.io). Drawn at that box (moved
+   * along when all its contents move together) as long as its contents keep
+   * their relative placement; otherwise it fits its contents like any other.
+   */
+  sourceBox?: SourceBox;
   line: number;
 }
 
@@ -138,6 +168,8 @@ export interface DEdge {
   double?: boolean;
   /** True when the source wrote it the other way round (`B <|-- A`); layout follows the written order. */
   reversed?: boolean;
+  /** Bend points the source draws (draw.io waypoints), absolute; become `via` when the layout comes from the file. */
+  sourceVia?: [number, number][];
   line: number;
 }
 
