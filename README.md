@@ -33,8 +33,27 @@ type (`interface` is a lollipop in a component diagram and a class box in a
 class diagram; `{` opens a container in one and a member list in the other).
 Lines nothing understands become warnings, never errors.
 
-Mermaid is next; the parsers feed one format-neutral model
-(`src/model/types.ts`), so a new input is a new parser.
+## Supported Mermaid diagrams
+
+`.mmd` / `.mermaid` files (fixtures in `fixtures/mermaid/`). A source with
+`@start` is always PlantUML; otherwise the extension decides, then the
+header line. Each Mermaid type lands on the same model as its PlantUML
+counterpart, with the same id conventions (`A-->B`, `B--|>A`, `#2`), so the
+sidecar works the same way.
+
+| Type | Status | Fixture |
+|---|---|---|
+| Flowchart / graph | ✅ all directions (RL/BT drawn as LR/TB); shapes `[ ]` `( )` `{ }` (diamond) `(( ))` `((( )))` `[( )]` `[[ ]]` `{{ }}` `([ ])` `>flag]`, `[/ /]` `[\ \]` as plain boxes, `A@{ shape: … }`; links `-->` `---` `-.->` `==>` `~~~` `<-->` `--o` `--x`, `-->\|text\|`, `-- text -->`, chains, `&`, `e1@-->` edge ids; nested subgraphs (per-subgraph `direction` ignored); classDef/class/style/linkStyle/click/`:::` ignored | `flowchart.mmd` |
+| Sequence | ✅ participant/actor (`as`, `@{ "type": … }`), all arrows incl. `-x` `-)` `<<->>`, `+`/`-` activation, activate/deactivate, create/destroy, notes, loop/alt/else/opt/par/and/critical/option/break, box, autonumber; `rect` not drawn | `sequence.mmd` |
+| Class | ✅ bodies, `~T~` generics, `["label"]`, annotations, `A : member`, all relations with cardinalities and labels, lollipops as circles, namespaces, `note for` | `class.mmd` |
+| State | ✅ scoped `[*]`, composites (nested, forward references), `state "x" as X`, descriptions, choice/fork/join, notes; `--` regions share one `[*]` | `state.mmd` |
+| ER | ✅ crow's feet in symbol and word form (`one or more to zero or many`), aliases, attribute blocks with PK/FK/UK and comments | `er.mmd` |
+| Gantt | ✅ dateFormat, sections, `excludes weekends`/weekdays, `weekend friday`, ids, `after a b`, `until x`, durations d/w/h, end dates (exclusive unless `inclusiveEndDates`), done/crit/milestone; excluded dates are reported, not drawn | `gantt.mmd` |
+| Mindmap | ✅ indentation tree; all node shapes drawn as topics; icons and classes ignored | `mindmap.mmd` |
+| Pie, journey, gitGraph, timeline, quadrant, XY, sankey, requirement, C4, block, packet, architecture, kanban, ... | recognised and reported; no layout to manage | |
+
+The parsers feed one format-neutral model (`src/model/types.ts`), so a new
+input is a new parser.
 
 ## Use
 
@@ -46,24 +65,51 @@ Mermaid is next; the parsers feed one format-neutral model
 
 Editor: drag elements (they become pinned), drag a box title to move the
 box with its contents, pull a line to bend it, double-click a bend to remove
-it, drag labels. Shift-click or shift-drag to multi-select; Alt disables
-alignment snapping. Auto layout re-lays out everything that isn't pinned.
-The editor reloads live when the .puml or the layout changes on disk.
+it, drag labels. Auto layout re-lays out everything that isn't pinned. The
+editor reloads live when the .puml or the layout changes on disk.
 
-Toolbar extras:
-- **Theme**: `classic` (PlantUML look), `modern` (indigo), `midnight`
-  (dark), `blueprint` (navy, mono type), `editorial` (warm paper, serif),
-  `mono` (print), `mint`. All but classic share one structure: one accent
-  colour, hairlines, pill use cases, avatar actors, caps titles. Stored in
-  layout.json, so `pnpm render` produces the same picture.
-- **Size**: text, icons and shapes from 75% to 300%, or "Largest that fits":
-  the biggest size at which nothing collides and the router keeps its line
-  corridors (positions are centres and stay put).
-- **Text − / +** and **Icons − / +**: 10% steps on top of Size; click the
-  percentage to reset to 100%. Stored as `view.text` / `view.icons`.
+Selection and panning (the **?** key in the toolbar shows this map):
+
+| | |
+|---|---|
+| Select | click; <kbd>Shift</kbd> or <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> click adds or removes |
+| Marquee | drag on empty canvas selects everything fully inside; with <kbd>Shift</kbd>/<kbd>Cmd</kbd> it adds |
+| Move | drag any selected element: the whole selection moves, one undo step, all pinned |
+| Nudge | arrow keys, <kbd>Shift</kbd> for 10 |
+| All / none | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>-A, <kbd>Esc</kbd> |
+| Pan | two-finger scroll or wheel, <kbd>Space</kbd>-drag (also over elements), middle-button drag |
+| Zoom | pinch, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + scroll |
+| No snap | hold <kbd>Alt</kbd> while dragging |
+| Keys | <kbd>U</kbd> unpin, <kbd>Del</kbd> straighten line, <kbd>F</kbd> fit view, <kbd>S</kbd> source, <kbd>Cmd</kbd>-Z / <kbd>Shift</kbd>-<kbd>Cmd</kbd>-Z |
+
+Sequence, Gantt and timing diagrams keep one selected element at a time, and
+a drag on empty canvas pans there. Selected elements get a dashed blue
+outline; the source panel highlights every selected declaration.
+
+Toolbar: one row. File picker (basenames, grouped by folder; full path on
+hover) · Auto layout, Reset, Unpin, Straighten · Undo, Redo · Frame + Fit to
+frame · **Display** (popover) · Fit view · Source · readout (selected,
+elements, lines, pinned, save state; counts drop out when narrow) · **Export
+SVG** with a menu · **?**.
+
+- **Display** popover:
+  - **Theme**: `classic` (PlantUML look), `modern` (indigo), `midnight`
+    (dark), `blueprint` (navy, mono type), `editorial` (warm paper, serif),
+    `mono` (print), `mint`, `primary`. All but classic share one structure:
+    one accent colour, hairlines, pill use cases, avatar actors, caps
+    titles. Stored in layout.json, so `pnpm render` produces the same picture.
+  - **Size**: text, icons and shapes from 75% to 300%, or "Largest that
+    fits": the biggest size at which nothing collides and the router keeps
+    its line corridors (positions are centres and stay put).
+  - **Text − / +** and **Icons − / +**: 10% steps on top of Size; click the
+    percentage to reset to 100%. Stored as `view.text` / `view.icons`.
+  - **Gaps** (sequence, Gantt, timing only): column and row gap, stored as
+    `view.spacing`.
+  - **Grid**: dotted canvas or plain white. Zoomed out, the dots switch to a
+    5× coarser grid and then disappear rather than turning into a grey mesh.
 - **Source** (S): read-only panel with the .puml (highlighted, line numbers)
-  and the live layout.json. Selecting an element highlights the line that
-  declares it; clicking a line selects what it declares.
+  and the live layout.json. Selecting elements highlights the lines that
+  declare them; clicking a line selects what it declares.
 - **Frame** + **Fit to frame**: pick an aspect ratio (16:9, 4:3, 1:1, A4,
   this window) and the diagram is re-arranged to fill it. The search tries
   16 layouts (layered in both directions × 4 spacings × element sizes
@@ -74,8 +120,12 @@ Toolbar extras:
   relative to the frame. Coordinates land on a 4px grid. ~1 s; undoable.
   (`src/layout/blocks.ts`, a per-container block layout with ports, lost on
   this fixture and is not in the search; kept for layout templates.)
-  Export SVG uses the frame as the canvas.
-- **Grid**: dotted canvas or plain white.
+  Export uses the frame as the canvas.
+- **Export**: the orange key downloads SVG; its menu adds PNG (2×, less for very large layouts; rasterised
+  from the same SVG), **Layout JSON** (downloads the sidecar exactly as the
+  editor saves it, named `x.layout.json`), **Copy layout JSON**, and
+  **Import layout JSON…** (replaces the layout as one undoable step;
+  elements the file doesn't place are laid out).
 
 ## layout.json
 

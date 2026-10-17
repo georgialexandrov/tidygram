@@ -1,6 +1,8 @@
 // End-to-end smoke test: drives the running editor (pnpm dev) in headless
 // Chrome over the DevTools protocol, drags a node and pulls a line, and checks
-// what was written to layout.json. Usage: node scripts/smoke.mjs [screenshot.png]
+// what was written to layout.json; then multi-select (shift-click, group drag,
+// one undo), marquee, and layout export. Usage: node scripts/smoke.mjs [screenshot.png]
+// Restores fixtures/food-delivery.layout.json afterwards.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +13,7 @@ const URL_ = 'http://localhost:5199/?file=fixtures/food-delivery.puml';
 const LAYOUT = new URL('../fixtures/food-delivery.layout.json', import.meta.url);
 const PORT = 9333;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const original = readFileSync(LAYOUT, 'utf8');
 
 const chrome = spawn(CHROME, [
   '--headless=new',
@@ -45,15 +48,28 @@ try {
       pending.set(n, (msg) => (msg.error ? reject(new Error(`${method}: ${msg.error.message}`)) : resolve(msg.result)));
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true })).result.value;
-  // Alt held: no alignment snapping, so the drag distance is exact.
-  const mouse = (type, x, y, buttons = 1) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1, modifiers: 1 });
+  const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
+  // Alt held: no alignment snapping, so the drag distance is exact. Shift = 8, Cmd = 4.
+  const ALT = 1;
+  const SHIFT = 8;
+  const mouse = (type, x, y, buttons = 1, modifiers = ALT) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1, modifiers });
   const drag = async (from, to, steps = 12) => {
     await mouse('mouseMoved', from[0], from[1], 0);
     await mouse('mousePressed', from[0], from[1]);
     for (let i = 1; i <= steps; i++) await mouse('mouseMoved', from[0] + ((to[0] - from[0]) * i) / steps, from[1] + ((to[1] - from[1]) * i) / steps);
     await mouse('mouseReleased', to[0], to[1], 0);
   };
+  const click = async (at, modifiers = 0) => {
+    await mouse('mouseMoved', at[0], at[1], 0, modifiers);
+    await mouse('mousePressed', at[0], at[1], 1, modifiers);
+    await mouse('mouseReleased', at[0], at[1], 0, modifiers);
+  };
+  const undoKey = async () => {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 4, windowsVirtualKeyCode: 90 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 4, windowsVirtualKeyCode: 90 });
+  };
+  const selected = () => evaluate(`[...document.querySelectorAll('[data-selected]')].map((g) => g.getAttribute('data-id')).sort()`);
+  const rectOf = (selector) => evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return [r.x, r.y, r.right, r.bottom]; })()`);
   const centreOf = (selector) =>
     evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r && [r.x + r.width / 2, r.y + r.height / 2]; })()`);
 
@@ -88,21 +104,69 @@ try {
   const afterBend = JSON.parse(readFileSync(LAYOUT, 'utf8'));
 
   // 3. Undo the bend.
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 4, windowsVirtualKeyCode: 90 });
-  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 4, windowsVirtualKeyCode: 90 });
+  await undoKey();
   await sleep(600);
   const afterUndo = JSON.parse(readFileSync(LAYOUT, 'utf8'));
 
+  // 3b. Multi-select: click Admin, shift-click Courier, drag Admin; both move, one undo restores both.
+  const groupBefore = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  await click(await centreOf('[data-id="Admin"] circle'));
+  await click(await centreOf('[data-id="Courier"] circle'), SHIFT);
+  await sleep(200);
+  const groupSel = await selected();
+  const adminNow = await centreOf('[data-id="Admin"] circle');
+  await drag(adminNow, [adminNow[0] + 80, adminNow[1] + 40]);
+  await sleep(600);
+  const groupAfter = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  await undoKey();
+  await sleep(600);
+  const groupUndone = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  const moved = (id, from, to) => [Math.round(to.nodes[id].x - from.nodes[id].x), Math.round(to.nodes[id].y - from.nodes[id].y), !!to.nodes[id].pinned];
+
+  // 3c. Marquee: drag on empty canvas around two actors; exactly those (and what else lies fully inside) get selected.
+  await click(await centreOf('.canvas'), 0); // clear (may land on an element; Escape below makes sure)
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  const [ax0, ay0, ax1, ay1] = await rectOf('[data-id="Admin"]');
+  const [sx0, sy0, sx1, sy1] = await rectOf('[data-id="Staff"]');
+  const from = [Math.min(ax0, sx0) - 6, Math.min(ay0, sy0) - 6];
+  const to = [Math.max(ax1, sx1) + 6, Math.max(ay1, sy1) + 6];
+  const startsEmpty = await evaluate(`!document.elementFromPoint(${from[0]}, ${from[1]}).closest('[data-id], [data-edge]')`);
+  await drag(from, to);
+  await sleep(300);
+  const marqueeSel = await selected();
+
+  // 3d. Layout export: the downloaded file is layout.json as saved, under the sidecar's name; copy gives the same text.
+  await evaluate(`(() => {
+    window.__downloads = [];
+    const create = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => { const url = create(blob); window.__lastBlob = blob; return url; };
+    HTMLAnchorElement.prototype.click = function () { window.__downloads.push({ name: this.download, blob: window.__lastBlob }); };
+    window.__copied = null;
+    navigator.clipboard.writeText = async (t) => { window.__copied = t; };
+  })()`);
+  await sleep(400); // let the last save land
+  await evaluate(`document.querySelector('.export-menu .opener').click()`);
+  await sleep(100);
+  const menuOpen = await evaluate(`!document.querySelector('.export-menu .popover-panel').hidden`);
+  await evaluate(`document.querySelector('[data-action="export-layout"]').click()`);
+  await sleep(100);
+  const exported = await evaluate(`(async () => { const d = window.__downloads.at(-1); return d && { name: d.name, text: await d.blob.text() }; })()`);
+  await evaluate(`document.querySelector('.export-menu .opener').click()`);
+  await evaluate(`document.querySelector('[data-action="copy-layout"]').click()`);
+  await sleep(100);
+  const copied = await evaluate(`window.__copied`);
+  const onDisk = readFileSync(LAYOUT, 'utf8');
+
   // 4. Modern theme, 16:9 frame, fit to frame, grid off.
-  const choose = (index, value) =>
+  const choose = (selector, value) =>
     evaluate(`(() => {
-      const el = document.querySelectorAll('.toolbar select')[${index}];
+      const el = document.querySelector('.toolbar ${selector}');
       Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
       el.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
-  await choose(1, 'modern');
+  await choose('.theme-select', 'modern');
   await sleep(300);
-  await choose(3, '16:9');
+  await choose('.frame-select', '16:9');
   await sleep(300);
   await evaluate(`[...document.querySelectorAll('.toolbar button')].find((b) => b.textContent === 'Fit to frame').click()`);
   let fitted = false;
@@ -135,6 +199,10 @@ try {
   await sleep(800);
   const afterSteps = JSON.parse(readFileSync(LAYOUT, 'utf8'));
   const highlighted = await evaluate(`[...document.querySelectorAll('.src-line.hl')].map((l) => l.textContent)`);
+  // Shift-click a second element: the source panel highlights both declarations.
+  await click(await centreOf('[data-id="UC_Pay"]'), SHIFT);
+  await sleep(300);
+  const highlightedTwo = await evaluate(`[...document.querySelectorAll('.src-line.hl')].map((l) => l.textContent)`);
 
   const shot = process.argv[2];
   if (shot) writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
@@ -152,6 +220,11 @@ try {
     gridShown,
     textIcons: [afterSteps.view?.text, afterSteps.view?.icons],
     highlighted,
+    highlightedTwo,
+    group: { selected: groupSel, Admin: moved('Admin', groupBefore, groupAfter), Courier: moved('Courier', groupBefore, groupAfter), expected: [Math.round(80 / k), Math.round(40 / k)] },
+    groupUndone: { Admin: groupUndone.nodes.Admin, Courier: groupUndone.nodes.Courier },
+    marquee: { startsEmpty, selected: marqueeSel },
+    layoutExport: { menuOpen, name: exported?.name, matchesDisk: exported?.text === onDisk, copyMatches: copied === onDisk },
     browserErrors: logs,
   };
   console.log(JSON.stringify(results, null, 2));
@@ -170,10 +243,29 @@ try {
     Math.abs((afterSteps.view?.icons ?? 1) - Math.min(3, (beforeSteps.icons ?? 1) + 0.1)) < 0.01 &&
     highlighted.length === 1 &&
     highlighted[0].includes('UC_Login') &&
+    highlightedTwo.length === 2 &&
+    highlightedTwo.some((l) => l.includes('UC_Pay')) &&
+    groupSel.join() === 'Admin,Courier' &&
+    ['Admin', 'Courier'].every((id) => {
+      const [dx, dy, pinned] = moved(id, groupBefore, groupAfter);
+      return Math.abs(dx - 80 / k) < 2 && Math.abs(dy - 40 / k) < 2 && pinned;
+    }) &&
+    JSON.stringify(groupUndone.nodes.Admin) === JSON.stringify(groupBefore.nodes.Admin) &&
+    JSON.stringify(groupUndone.nodes.Courier) === JSON.stringify(groupBefore.nodes.Courier) &&
+    startsEmpty &&
+    marqueeSel.includes('Admin') &&
+    marqueeSel.includes('Staff') &&
+    !marqueeSel.includes('Courier') &&
+    menuOpen &&
+    exported?.name === 'food-delivery.layout.json' &&
+    exported.text === onDisk &&
+    copied === onDisk &&
     logs.length === 0;
   console.log(ok ? 'SMOKE OK' : 'SMOKE FAILED');
   ws.close();
   process.exitCode = ok ? 0 : 1;
 } finally {
   chrome.kill();
+  await sleep(600); // a debounced save may still be in flight
+  writeFileSync(LAYOUT, original);
 }

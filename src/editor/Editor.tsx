@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { perf } from './perf.ts';
 import { SourcePanel } from './SourcePanel.tsx';
+import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, type LayoutMode } from '../layout/auto.ts';
 import { emptyLayout, parseLayout, serializeLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
-import { parsePuml } from '../model/parse.ts';
+import { parseDiagram } from '../model/diagram.ts';
 import type { Diagram, ParseWarning } from '../model/types.ts';
 import { AnyContent, DiagramSvg, type Interaction } from '../render/DiagramSvg.tsx';
 import { buildAnyScene, type AnyScene } from '../scene/any.ts';
 import { sourceItems } from '../model/items.ts';
 import type { Avoid } from '../scene/avoid.ts';
-import { ancestry, overlaps, type Box } from '../scene/containers.ts';
+import { ancestry, type Box } from '../scene/containers.ts';
 import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
 import { THEMES } from '../scene/theme.ts';
 import { fitToFrame } from '../layout/fit.ts';
 import { largestScale } from '../layout/scale.ts';
 
 const SIZES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-import { alignmentSnap, clearVia, insertVia, moveNodes, moveVia, removeVia, setLabelOffset, setPinned, type Guide } from './edits.ts';
+import { alignmentSnap, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
+import { addAll, boxFrom, clickSelect, groupByFolder, marqueeSelect } from './selection.ts';
 
 interface Doc {
   file: string;
@@ -66,16 +68,27 @@ type Drag =
       before: LayoutFile;
       origin: Record<string, { x: number; y: number }>;
       originVia: Record<string, Point[]>;
+      /** Fixed for the whole drag: what to re-route, and what to snap against. */
+      dirtyNodes: ReadonlySet<string>;
+      others: { x: number; y: number }[];
       moved: boolean;
     }
   | { kind: 'edge'; id: string; start: Point; before: LayoutFile }
   | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean }
   | { kind: 'label'; id: string; start: Point; origin: Point; before: LayoutFile; moved: boolean }
   | { kind: 'pan'; client: Point; origin: View; moved: boolean }
-  | { kind: 'marquee'; start: Point };
+  | { kind: 'marquee'; start: Point; client: Point; additive: boolean; base: ReadonlySet<string>; box: Box | null };
 
 const DRAG_THRESHOLD = 3;
 const SNAP = 6;
+
+function download(blob: Blob, name: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 
 function descendants(diagram: Diagram, container: string): string[] {
   const ids = new Set([container]);
@@ -103,6 +116,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const [grid, setGrid] = useState(() => localStorage.getItem('puml-layout:grid') !== 'off');
   const [busy, setBusy] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(() => localStorage.getItem('puml-layout:source') === 'on');
+  /** Space held (ready to pan) or a pan in progress: drives the grab cursor. */
+  const [panning, setPanning] = useState(false);
+  const spaceHeld = useRef(false);
 
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -153,7 +169,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         const res = await fetch(`/api/doc?file=${encodeURIComponent(target)}`);
         if (!res.ok) throw new Error((await res.json()).error ?? res.statusText);
         const body = (await res.json()) as { source: string; layout: string | null };
-        const parsed = parsePuml(body.source);
+        const parsed = parseDiagram(body.source, target);
         let base = layoutRef.current;
         if (what !== 'source') {
           try {
@@ -269,44 +285,48 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   const startNodeDrag = (ids: string[], primary: string, e: ReactPointerEvent) => {
     const l = layoutRef.current;
+    const diagram = doc!.diagram;
     // Sequence columns have no stored position until dragged; start from where the layout put them.
     const columns = sceneRef.current?.kind === 'sequence' ? sceneRef.current.columns : {};
     const at = (id: string) => l.nodes[id] ?? (columns[id] !== undefined ? { x: columns[id]!, y: 0 } : undefined);
     const origin = Object.fromEntries(ids.filter((id) => at(id)).map((id) => [id, { x: at(id)!.x, y: at(id)!.y }]));
-    const originVia = Object.fromEntries(Object.entries(l.edges).flatMap(([id, e2]) => (e2.via ? [[id, e2.via]] : [])));
-    drag.current = { kind: 'nodes', ids, primary, start: toDiagram(e.clientX, e.clientY), before: l, origin, originVia, moved: false };
+    const moving = new Set(ids);
+    const parents = new Map(diagram.nodes.map((n) => [n.id, n.parent]));
+    // Lines that end on an enclosing container move with its border, so they count as dirty too.
+    const dirtyNodes = new Set([...ids, ...ids.flatMap((id) => ancestry(diagram, parents.get(id)))]);
+    const others = diagram.nodes.flatMap((n) => (!moving.has(n.id) && l.nodes[n.id] ? [l.nodes[n.id]!] : []));
+    drag.current = { kind: 'nodes', ids, primary, start: toDiagram(e.clientX, e.clientY), before: l, origin, originVia: viaOf(l), dirtyNodes, others, moved: false };
     capture(e);
   };
+
+  /** Free (graph) diagrams take multi-selection and marquee; ordered ones keep one element at a time. */
+  const multi = scene?.kind === 'graph';
 
   const ix: Interaction = {
     selectedNodes: selNodes,
     selectedEdge: selEdge,
     showPins: true,
     onNodeDown(id, e) {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || spaceHeld.current) return; // Space-drag pans, even over elements
       e.stopPropagation();
-      let selection = new Set(selNodes);
-      if (e.shiftKey) {
-        if (selection.has(id)) selection.delete(id);
-        else selection.add(id);
-      } else if (!selection.has(id)) {
-        selection = new Set([id]);
-      }
+      const selection = clickSelect(selNodes, id, e.shiftKey || e.metaKey || e.ctrlKey, multi);
       setSelNodes(selection);
       setSelEdge(undefined);
       if (selection.has(id)) startNodeDrag([...selection], id, e);
     },
     onContainerDown(id, e) {
-      if (e.button !== 0 || !doc) return;
+      if (e.button !== 0 || !doc || spaceHeld.current) return;
       e.stopPropagation();
-      const ids = descendants(doc.diagram, id);
-      if (!ids.length) return;
-      setSelNodes(new Set(ids));
+      const contents = descendants(doc.diagram, id);
+      if (!contents.length) return;
+      const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+      const selection = addAll(selNodes, contents, additive);
+      setSelNodes(selection);
       setSelEdge(undefined);
-      startNodeDrag(ids, ids[0]!, e);
+      startNodeDrag([...selection], contents[0]!, e);
     },
     onEdgeDown(id, e) {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || spaceHeld.current) return; // Space-drag pans, even over elements
       e.stopPropagation();
       setSelEdge(id);
       setSelNodes(new Set());
@@ -320,7 +340,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       commit(insertVia(layoutRef.current, doc.diagram, id, [Math.round(p[0]), Math.round(p[1])]).layout);
     },
     onLabelDown(id, e) {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || spaceHeld.current) return; // Space-drag pans, even over elements
       e.stopPropagation();
       setSelEdge(id);
       setSelNodes(new Set());
@@ -329,7 +349,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       capture(e);
     },
     onViaDown(id, index, e) {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || spaceHeld.current) return; // Space-drag pans, even over elements
       e.stopPropagation();
       const l = layoutRef.current;
       drag.current = { kind: 'via', id, index, before: l, base: l, moved: false };
@@ -364,12 +384,19 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     [],
   );
 
+  /**
+   * Empty canvas: drag = marquee on free diagrams; Space-drag, middle button,
+   * or any drag on ordered diagrams = pan. Two-finger scroll pans everywhere.
+   */
   const onBackgroundDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     if (e.button !== 0 && e.button !== 1) return;
-    if (e.shiftKey && e.button === 0) {
-      drag.current = { kind: 'marquee', start: toDiagram(e.clientX, e.clientY) };
+    if (e.button === 0 && multi && !spaceHeld.current) {
+      const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+      drag.current = { kind: 'marquee', start: toDiagram(e.clientX, e.clientY), client: [e.clientX, e.clientY], additive, base: selNodes, box: null };
     } else {
+      e.preventDefault(); // middle button: no autoscroll
       drag.current = { kind: 'pan', client: [e.clientX, e.clientY], origin: viewRef.current, moved: false };
+      setPanning(true);
     }
     capture(e);
   };
@@ -390,19 +417,14 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         const ordered = sceneRef.current?.kind === 'sequence';
         if (ordered) dy = 0; // columns only move sideways
         if (primary && !e.altKey && !ordered) {
-          const moving = new Set(d.ids);
-          const others = Object.entries(d.before.nodes)
-            .filter(([id]) => !moving.has(id) && doc.diagram.nodes.some((n) => n.id === id))
-            .map(([, n]) => n);
-          const snap = alignmentSnap({ x: primary.x + dx, y: primary.y + dy }, others, SNAP / k);
+          const snap = alignmentSnap({ x: primary.x + dx, y: primary.y + dy }, d.others, SNAP / k);
           dx += snap.dx;
           dy += snap.dy;
           setGuides(snap.guides);
         } else {
           setGuides([]);
         }
-        // Lines that end on an enclosing container move with its border, so they count as dirty too.
-        dirty.current = { nodes: new Set([...d.ids, ...d.ids.flatMap((id) => ancestry(doc.diagram, doc.diagram.nodes.find((n) => n.id === id)?.parent))]), edges: new Set() };
+        dirty.current = { nodes: d.dirtyNodes, edges: new Set() };
         setLayout(moveNodes(d.before, doc.diagram, d.origin, d.originVia, Math.round(dx), Math.round(dy)));
         break;
       }
@@ -439,12 +461,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         break;
       }
       case 'marquee':
-        setMarquee({
-          x: Math.min(d.start[0], p[0]),
-          y: Math.min(d.start[1], p[1]),
-          w: Math.abs(p[0] - d.start[0]),
-          h: Math.abs(p[1] - d.start[1]),
-        });
+        if (!d.box && Math.hypot(e.clientX - d.client[0], e.clientY - d.client[1]) < DRAG_THRESHOLD) return;
+        d.box = boxFrom(d.start, p);
+        setMarquee(d.box);
         break;
     }
   };
@@ -465,19 +484,23 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         if (d.moved) commit({ ...layoutRef.current }, d.before);
         break;
       case 'pan':
+        setPanning(spaceHeld.current);
         if (!d.moved) {
           setSelNodes(new Set());
           setSelEdge(undefined);
         }
         break;
-      case 'marquee':
-        if (marquee && scene) {
-          const candidates = scene.kind === 'graph' ? scene.nodes : scene.kind === 'sequence' ? scene.heads : [];
-          setSelNodes(new Set(candidates.filter((n) => overlaps(n.box, marquee)).map((n) => n.node.id)));
-          setSelEdge(undefined);
+      case 'marquee': {
+        const s = sceneRef.current;
+        if (d.box && s?.kind === 'graph') {
+          setSelNodes(marqueeSelect(d.base, s.nodes.map((n) => ({ id: n.node.id, box: n.box })), d.box, d.additive));
+        } else if (!d.additive) {
+          setSelNodes(new Set()); // a plain click on empty canvas clears
         }
+        setSelEdge(undefined);
         setMarquee(null);
         break;
+      }
       case 'edge':
         break;
     }
@@ -530,7 +553,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   );
 
   const updateViewSettings = useCallback(
-    (patch: { theme?: string; frame?: Point | null; scale?: number; text?: number; icons?: number }) => {
+    (patch: { theme?: string; frame?: Point | null; scale?: number; text?: number; icons?: number; spacing?: Point }) => {
       const l = layoutRef.current;
       const view = { ...l.view };
       for (const key of ['text', 'icons'] as const) {
@@ -543,6 +566,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       if (patch.scale !== undefined) {
         if (patch.scale === 1) delete view.scale;
         else view.scale = patch.scale;
+      }
+      if (patch.spacing) {
+        if (patch.spacing[0] === 1 && patch.spacing[1] === 1) delete view.spacing;
+        else view.spacing = patch.spacing;
       }
       if (patch.frame === null) delete view.frame;
       else if (patch.frame) view.frame = patch.frame;
@@ -616,19 +643,78 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     [doc],
   );
 
+  const baseName = doc ? doc.file.split('/').pop()!.replace(/\.\w+$/, '') : 'diagram';
+
+  /** Shows a short message in the readout for a few seconds. */
+  const flash = useCallback((message: string) => {
+    setBusy(message);
+    window.setTimeout(() => setBusy((b) => (b === message ? null : b)), 3000);
+  }, []);
+
   const exportSvg = useCallback(() => {
-    if (!scene || !doc) return;
+    if (!scene) return;
+    download(new Blob([renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} />)], { type: 'image/svg+xml' }), `${baseName}.svg`);
+  }, [scene, frame, baseName]);
+
+  /** PNG at up to 2x, rasterised by the browser from the same SVG the SVG export writes. */
+  const exportPng = useCallback(async () => {
+    if (!scene) return;
     const markup = renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} />);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
-    a.download = doc.file.split('/').pop()!.replace(/\.\w+$/, '') + '.svg';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, [scene, doc, frame]);
+    const img = new Image();
+    img.src = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
+    try {
+      await img.decode();
+      // Browsers refuse canvases much past 16k px a side; large scaled layouts get less than 2x.
+      const k = Math.min(2, 8192 / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * k);
+      canvas.height = Math.round(img.naturalHeight * k);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'));
+      if (!blob) throw new Error(`canvas of ${canvas.width}×${canvas.height} px could not be encoded`);
+      download(blob, `${baseName}.png`);
+    } catch (e) {
+      setError(`PNG export failed: ${String(e)}`);
+    } finally {
+      URL.revokeObjectURL(img.src);
+    }
+  }, [scene, frame, baseName]);
+
+  /** The sidecar exactly as the editor saves it, under the sidecar's own name. */
+  const exportLayout = useCallback(() => {
+    if (!doc) return;
+    download(new Blob([serializeLayout(layoutRef.current)], { type: 'application/json' }), sidecarName(doc.file));
+  }, [doc]);
+
+  const copyLayout = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(serializeLayout(layoutRef.current));
+      flash('Copied layout.json');
+    } catch (e) {
+      setError(`Copy failed: ${String(e)}`);
+    }
+  }, [flash]);
+
+  const importInput = useRef<HTMLInputElement>(null);
+  /** Replaces the layout with a file's, as one undoable step; elements it doesn't place are laid out. */
+  const importLayout = useCallback(
+    async (picked: File | undefined) => {
+      if (!picked || !doc) return;
+      try {
+        const next = await ensureLayout(doc.diagram, parseLayout(await picked.text()), 'fill');
+        commit(next);
+        needsFit.current = true;
+        flash(`Imported ${picked.name}`);
+      } catch (e) {
+        setError(`Import failed: ${String(e)}`);
+      }
+    },
+    [doc, commit, flash],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -636,9 +722,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         else undo();
         return;
       }
-      if (mod && e.key.toLowerCase() === 'a' && doc) {
+      if (mod && e.key.toLowerCase() === 'a' && doc && sceneRef.current?.kind === 'graph') {
         e.preventDefault();
         setSelNodes(new Set(doc.diagram.nodes.map((n) => n.id)));
+        setSelEdge(undefined);
         return;
       }
       if (e.key === 'Escape') {
@@ -655,115 +742,122 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       if (arrow && selNodes.size && doc) {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
-        const l = layoutRef.current;
-        const origin = Object.fromEntries([...selNodes].filter((id) => l.nodes[id]).map((id) => [id, l.nodes[id]!]));
-        const originVia = Object.fromEntries(Object.entries(l.edges).flatMap(([id, x]) => (x.via ? [[id, x.via]] : [])));
-        commit(setPinned(moveNodes(l, doc.diagram, origin, originVia, arrow[0] * step, arrow[1] * step), selNodes, true));
+        commit(moveSelection(layoutRef.current, doc.diagram, selNodes, arrow[0] * step, arrow[1] * step));
       }
     };
+    // Space held = pan mode (like design tools). Not while a key or field has focus: Space presses buttons there.
+    const isControl = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest('button, input, select, textarea');
+    const onSpace = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || isControl(e.target)) return;
+      e.preventDefault();
+      const down = e.type === 'keydown';
+      if (spaceHeld.current === down) return;
+      spaceHeld.current = down;
+      if (!drag.current) setPanning(down);
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onSpace);
+    window.addEventListener('keyup', onSpace);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onSpace);
+      window.removeEventListener('keyup', onSpace);
+    };
   }, [doc, selNodes, selEdge, commit, undo, redo, fit, toggleSource]);
 
   const pinnedCount = doc ? doc.diagram.nodes.filter((n) => layout.nodes[n.id]?.pinned).length : 0;
   const staleCount = doc ? Object.keys(layout.nodes).filter((id) => !doc.diagram.nodes.some((n) => n.id === id)).length : 0;
   const big = 1e5;
+  const fileGroups = useMemo(() => groupByFolder(files), [files]);
+  const spacing = layout.view?.spacing ?? [1, 1];
+  // Dots closer than 12px read as a grey mesh: switch to a 5x coarser grid, then hide it.
+  const gridStep = 20 * view.k >= 12 ? 20 : 100 * view.k >= 12 ? 100 : 0;
 
   return (
     <div className="app">
       <header className="toolbar">
-        <div className="deck-head">
-          <div className="nameplate">
-            <span className="nameplate-name">puml</span>
-            <span className="nameplate-model">Layout</span>
-          </div>
-          <label className="loaded" title="Diagram">
-            <span className="group-label">File</span>
-            <select className="file-select" value={file ?? ''} onChange={(e) => setFile(e.target.value)}>
-              {files.map((f) => (
-                <option key={f} value={f}>
-                  {f}
+        <div className="nameplate" aria-label="puml layout">
+          <span className="nameplate-name">puml</span>
+          <span className="nameplate-model">Layout</span>
+        </div>
+        <select className="file-select" value={file ?? ''} onChange={(e) => setFile(e.target.value)} title={file ?? 'Diagram'} aria-label="Diagram">
+          {fileGroups.map((g) => (
+            <optgroup key={g.folder} label={g.folder}>
+              {g.files.map((f) => (
+                <option key={f.path} value={f.path} title={f.path}>
+                  {f.name}
                 </option>
               ))}
-            </select>
-          </label>
-          <div className="readout">
-            <span className="meta">
-              {doc && (
-                <>
-                  <span className="cell">
-                    <span className="num">{doc.diagram.nodes.length}</span> elements
-                  </span>
-                  <span className="cell">
-                    <span className="num">{doc.diagram.edges.length}</span> lines
-                  </span>
-                  <span className="cell">
-                    <span className="num">{pinnedCount}</span> pinned
-                  </span>
-                </>
-              )}
-              {staleCount > 0 && (
-                <span className="cell stale">
-                  <span className="num">{staleCount}</span> stale in layout.json
-                </span>
-              )}
-            </span>
-            {doc && doc.warnings.length > 0 && (
-              <button className="warn" aria-expanded={showWarnings} onClick={() => setShowWarnings((s) => !s)}>
-                <svg className="glyph" width="12" height="11" viewBox="0 0 12 11" aria-hidden="true">
-                  <path d="M6 0.5 11.5 10.5H0.5Z" />
-                </svg>
-                {doc.warnings.length} warning{doc.warnings.length > 1 ? 's' : ''}
-              </button>
-            )}
-            {busy && (
-              <span className="busy" role="status">
-                {busy}
-              </span>
-            )}
-            <span className={`status ${status}`} role="status">
-              {status === 'saving' ? 'saving…' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}
-            </span>
-          </div>
+            </optgroup>
+          ))}
+        </select>
+        <span className="sep" aria-hidden="true" />
+        <div className="keys joined" role="group" aria-label="Layout">
+          <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
+            Auto layout
+          </button>
+          <button onClick={() => void runLayout('reset')} title="Discard the layout and start over">
+            Reset
+          </button>
+          <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
+            Unpin
+          </button>
+          <button disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
+            Straighten
+          </button>
         </div>
-        <div className="deck">
-          <div className="group" role="group" aria-label="Layout">
-            <span className="group-label" aria-hidden="true">
-              Layout
-            </span>
-            <div className="keys joined">
-              <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
-                Auto layout
-              </button>
-              <button onClick={() => void runLayout('reset')} title="Discard the layout and start over">
-                Reset
-              </button>
-              <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
-                Unpin
-              </button>
-              <button disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
-                Straighten
-              </button>
-            </div>
-          </div>
-          <div className="group" role="group" aria-label="History">
-            <span className="group-label" aria-hidden="true">
-              History
-            </span>
-            <div className="keys joined">
-              <button onClick={undo} title="Undo (⌘Z)">
-                Undo
-              </button>
-              <button onClick={redo} title="Redo (⇧⌘Z)">
-                Redo
-              </button>
-            </div>
-          </div>
-          <div className="group" role="group" aria-label="Appearance">
-            <span className="group-label" aria-hidden="true">
-              Appearance
-            </span>
-            <div className="keys">
+        <div className="keys joined" role="group" aria-label="History">
+          <button className="icon" onClick={undo} title="Undo (⌘Z)" aria-label="Undo">
+            <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+              <path d="M4.5 1 1 4.5 4.5 8M1 4.5h8a4 4 0 0 1 0 8H7" />
+            </svg>
+          </button>
+          <button className="icon" onClick={redo} title="Redo (⇧⌘Z)" aria-label="Redo">
+            <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+              <path d="M9.5 1 13 4.5 9.5 8M13 4.5H5a4 4 0 0 0 0 8h2" />
+            </svg>
+          </button>
+        </div>
+        <span className="sep" aria-hidden="true" />
+        <div className="keys" role="group" aria-label="Frame and fit">
+          <select
+            className="frame-select"
+            value={frame ? `${frame[0]}:${frame[1]}` : ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return updateViewSettings({ frame: null });
+              if (v === 'window') {
+                const r = svgRef.current!.getBoundingClientRect();
+                return updateViewSettings({ frame: [Math.round(r.width), Math.round(r.height)] });
+              }
+              const [w, h] = v.split(':').map(Number);
+              updateViewSettings({ frame: [w!, h!] });
+            }}
+            title="Frame: the shape the diagram should fit"
+            aria-label="Frame"
+          >
+            <option value="">No frame</option>
+            {FRAME_PRESETS.map((p) => (
+              <option key={p.label} value={`${p.frame[0]}:${p.frame[1]}`}>
+                {p.label}
+              </option>
+            ))}
+            {frame && !FRAME_PRESETS.some((p) => p.frame[0] === frame[0] && p.frame[1] === frame[1]) && (
+              <option value={`${frame[0]}:${frame[1]}`}>
+                {frame[0]}:{frame[1]}
+              </option>
+            )}
+            <option value="window">This window</option>
+          </select>
+          <button disabled={!frame || !!busy?.endsWith('…')} onClick={() => void fitFrame()} title="Re-arrange everything to fill the frame (undoable)">
+            Fit to frame
+          </button>
+        </div>
+        <span className="sep" aria-hidden="true" />
+        <div className="keys" role="group" aria-label="View">
+          <Popover label="Display" title="Theme, size, text and icon scale, grid" className="display">
+            <div className="field">
+              <span className="field-label">Theme</span>
               <select className="theme-select" value={layout.view?.theme ?? 'classic'} onChange={(e) => updateViewSettings({ theme: e.target.value })} title="Theme">
                 {Object.values(THEMES).map((t) => (
                   <option key={t.name} value={t.name}>
@@ -771,6 +865,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="field">
+              <span className="field-label">Size</span>
               <select
                 className="size-select"
                 value={String(layout.view?.scale ?? 1)}
@@ -785,61 +882,30 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               >
                 {[...new Set([...SIZES, layout.view?.scale ?? 1])].sort((a, b) => a - b).map((v) => (
                   <option key={v} value={String(v)}>
-                    Size {Math.round(v * 100)}%
+                    {Math.round(v * 100)}%
                   </option>
                 ))}
                 {!doc?.diagram.special && <option value="max">Largest that fits</option>}
               </select>
-              <Stepper label="Text" value={layout.view?.text ?? 1} onChange={(v) => updateViewSettings({ text: v })} title="Text size, on top of Size" />
-              <Stepper label="Icons" value={layout.view?.icons ?? 1} onChange={(v) => updateViewSettings({ icons: v })} title="Actor and system icon size, on top of Size" />
             </div>
-          </div>
-          <div className="group" role="group" aria-label="Frame and fit">
-            <span className="group-label" aria-hidden="true">
-              Frame &amp; fit
-            </span>
-            <div className="keys">
-              <select
-                className="frame-select"
-                value={frame ? `${frame[0]}:${frame[1]}` : ''}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) return updateViewSettings({ frame: null });
-                  if (v === 'window') {
-                    const r = svgRef.current!.getBoundingClientRect();
-                    return updateViewSettings({ frame: [Math.round(r.width), Math.round(r.height)] });
-                  }
-                  const [w, h] = v.split(':').map(Number);
-                  updateViewSettings({ frame: [w!, h!] });
-                }}
-                title="Frame: the shape the diagram should fit"
-              >
-                <option value="">No frame</option>
-                {FRAME_PRESETS.map((p) => (
-                  <option key={p.label} value={`${p.frame[0]}:${p.frame[1]}`}>
-                    {p.label}
-                  </option>
-                ))}
-                {frame && !FRAME_PRESETS.some((p) => p.frame[0] === frame[0] && p.frame[1] === frame[1]) && (
-                  <option value={`${frame[0]}:${frame[1]}`}>
-                    {frame[0]}:{frame[1]}
-                  </option>
-                )}
-                <option value="window">This window</option>
-              </select>
-              <button disabled={!frame || !!busy?.endsWith('…')} onClick={() => void fitFrame()} title="Re-arrange everything to fill the frame (undoable)">
-                Fit to frame
-              </button>
+            <div className="field">
+              <span className="field-label">Scale</span>
+              <span className="field-keys">
+                <Stepper label="Text" value={layout.view?.text ?? 1} onChange={(v) => updateViewSettings({ text: v })} title="Text size, on top of Size" />
+                <Stepper label="Icons" value={layout.view?.icons ?? 1} onChange={(v) => updateViewSettings({ icons: v })} title="Actor and system icon size, on top of Size" />
+              </span>
             </div>
-          </div>
-          <div className="group" role="group" aria-label="View">
-            <span className="group-label" aria-hidden="true">
-              View
-            </span>
-            <div className="keys">
-              <button onClick={fit} title="Fit the diagram to the window (F)">
-                Fit view
-              </button>
+            {doc?.diagram.special && (
+              <div className="field">
+                <span className="field-label">Gaps</span>
+                <span className="field-keys">
+                  <Stepper label="Across" value={spacing[0]} onChange={(v) => updateViewSettings({ spacing: [v, spacing[1]] })} title="Column (or time) gap" />
+                  <Stepper label="Down" value={spacing[1]} onChange={(v) => updateViewSettings({ spacing: [spacing[0], v] })} title="Row gap" />
+                </span>
+              </div>
+            )}
+            <div className="field">
+              <span className="field-label">Canvas</span>
               <label className="toggle" title="Dotted grid behind the diagram">
                 <input
                   type="checkbox"
@@ -851,23 +917,131 @@ export function Editor({ avoid }: { avoid: Avoid }) {
                 />
                 Grid
               </label>
-              <button className={`switch${showSource ? ' active' : ''}`} aria-pressed={showSource} onClick={() => toggleSource()} title="Show the source and layout.json (S)">
-                <span className="lamp" aria-hidden="true" />
-                Source
-              </button>
             </div>
-          </div>
-          <div className="group group-export" role="group" aria-label="Export">
-            <span className="group-label" aria-hidden="true">
-              Export
-            </span>
-            <div className="keys">
-              <button className="primary" onClick={exportSvg} title="Download the laid-out diagram as SVG">
-                Export SVG
-              </button>
-            </div>
-          </div>
+          </Popover>
+          <button onClick={fit} title="Fit the diagram to the window (F)">
+            Fit view
+          </button>
+          <button className={`switch${showSource ? ' active' : ''}`} aria-pressed={showSource} onClick={() => toggleSource()} title="Show the source and layout.json (S)">
+            <span className="lamp" aria-hidden="true" />
+            Source
+          </button>
         </div>
+        <div className="readout">
+          {busy && (
+            <span className="busy" role="status" title={busy}>
+              {busy}
+            </span>
+          )}
+          {doc && doc.warnings.length > 0 && (
+            <button className="warn" aria-expanded={showWarnings} onClick={() => setShowWarnings((s) => !s)}>
+              <svg className="glyph" width="12" height="11" viewBox="0 0 12 11" aria-hidden="true">
+                <path d="M6 0.5 11.5 10.5H0.5Z" />
+              </svg>
+              {doc.warnings.length}
+            </button>
+          )}
+          {doc && (
+            <span className="meta" title={`${doc.diagram.nodes.length} elements, ${doc.diagram.edges.length} lines, ${pinnedCount} pinned${staleCount ? `, ${staleCount} stale ids in layout.json` : ''}`}>
+              {selNodes.size > 1 && (
+                <span className="cell selected">
+                  <span className="num">{selNodes.size}</span> selected
+                </span>
+              )}
+              <span className="cell total">
+                <span className="num">{doc.diagram.nodes.length}</span> elements
+              </span>
+              <span className="cell total">
+                <span className="num">{doc.diagram.edges.length}</span> lines
+              </span>
+              <span className="cell">
+                <span className="num">{pinnedCount}</span> pinned
+              </span>
+              {staleCount > 0 && (
+                <span className="cell stale">
+                  <span className="num">{staleCount}</span> stale
+                </span>
+              )}
+            </span>
+          )}
+          <span className={`status ${status}`} role="status" title={status === 'saved' ? 'layout.json saved' : undefined}>
+            {status === 'saving' ? 'saving' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}
+          </span>
+        </div>
+        <div className="keys split" role="group" aria-label="Export">
+          <button className="primary" onClick={exportSvg} title="Download the laid-out diagram as SVG">
+            Export SVG
+          </button>
+          <Popover label={<span className="sr-only">More export</span>} title="More export: PNG, layout.json" className="export-menu" align="right">
+            {(close) => (
+              <div className="menu" role="menu">
+                <button role="menuitem" onClick={() => (close(), exportSvg())}>
+                  SVG <span className="hint">{baseName}.svg</span>
+                </button>
+                <button role="menuitem" onClick={() => (close(), void exportPng())}>
+                  PNG <span className="hint">≤ 2×</span>
+                </button>
+                <span className="menu-rule" aria-hidden="true" />
+                <button role="menuitem" data-action="export-layout" onClick={() => (close(), exportLayout())}>
+                  Layout JSON <span className="hint">{doc ? sidecarName(doc.file) : ''}</span>
+                </button>
+                <button role="menuitem" data-action="copy-layout" onClick={() => (close(), void copyLayout())}>
+                  Copy layout JSON
+                </button>
+                <button role="menuitem" data-action="import-layout" onClick={() => (close(), importInput.current?.click())}>
+                  Import layout JSON… <span className="hint">undoable</span>
+                </button>
+              </div>
+            )}
+          </Popover>
+          <input
+            ref={importInput}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(e) => {
+              void importLayout(e.target.files?.[0]);
+              e.target.value = '';
+            }}
+          />
+        </div>
+        <Popover label="?" title="Mouse and keyboard" className="help" align="right">
+          <dl className="keymap">
+            <dt>Move</dt>
+            <dd>drag an element, label or box title; selection moves together</dd>
+            <dt>Select</dt>
+            <dd>click; <kbd>⇧</kbd>/<kbd>⌘</kbd> click to add or remove</dd>
+            <dt>Marquee</dt>
+            <dd>drag on empty canvas; <kbd>⇧</kbd> adds to the selection</dd>
+            <dt>All / none</dt>
+            <dd>
+              <kbd>⌘A</kbd> / <kbd>Esc</kbd>
+            </dd>
+            <dt>Nudge</dt>
+            <dd>
+              arrows, <kbd>⇧</kbd> ×10
+            </dd>
+            <dt>Pan</dt>
+            <dd>
+              two-finger scroll, <kbd>Space</kbd> drag, middle button
+            </dd>
+            <dt>Zoom</dt>
+            <dd>
+              pinch, <kbd>⌘</kbd> scroll
+            </dd>
+            <dt>Bend</dt>
+            <dd>pull a line; double-click a bend to remove</dd>
+            <dt>No snap</dt>
+            <dd>
+              hold <kbd>Alt</kbd>
+            </dd>
+            <dt>Keys</dt>
+            <dd>
+              <kbd>U</kbd> unpin · <kbd>Del</kbd> straighten · <kbd>F</kbd> fit · <kbd>S</kbd> source · <kbd>⌘Z</kbd> undo
+            </dd>
+          </dl>
+          <p className="keymap-note">Sequence, Gantt and timing select one element; drag on empty canvas pans.</p>
+        </Popover>
       </header>
       {error && <div className="error">{error}</div>}
       {showWarnings && doc && (
@@ -880,79 +1054,53 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         </div>
       )}
       <div className="workspace">
-      <svg
-        ref={svgRef}
-        className="canvas"
-        style={{ background: scene?.theme.colors.background }}
-        onPointerDown={onBackgroundDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      >
-        <defs>
-          <pattern id="grid" width={20 * view.k} height={20 * view.k} x={view.x} y={view.y} patternUnits="userSpaceOnUse">
-            <circle cx={1} cy={1} r={1} fill="#CFCBC2" />
-          </pattern>
-        </defs>
-        {grid && <rect width="100%" height="100%" fill="url(#grid)" />}
-        <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
-          {frameBox && (
-            <g className="frame">
-              <rect x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} fill={scene?.theme.colors.background} />
-              <text x={frameBox.x} y={frameBox.y - 8}>
-                {frame![0]}:{frame![1]}
-              </text>
-            </g>
-          )}
-          {scene && <AnyContent scene={scene} ix={stableIx} />}
-          {frameBox && <rect className="frame-border" x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} />}
-          {guides.map((g, i) =>
-            g.axis === 'x' ? (
-              <line key={i} x1={g.value} x2={g.value} y1={-big} y2={big} className="guide" />
-            ) : (
-              <line key={i} y1={g.value} y2={g.value} x1={-big} x2={big} className="guide" />
-            ),
-          )}
-          {marquee && <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" />}
-        </g>
-      </svg>
-      {showSource && doc && (
-        <SourcePanel
-          file={doc.file}
-          source={doc.source}
-          layoutJson={serializeLayout(layout)}
-          highlighted={highlightedLines}
-          onLineClick={selectLine}
-          onClose={() => toggleSource(false)}
-        />
-      )}
+        <svg
+          ref={svgRef}
+          className={`canvas${panning ? ' panning' : ''}${multi ? ' marquee-mode' : ''}`}
+          style={{ background: scene?.theme.colors.background }}
+          onPointerDown={onBackgroundDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          <defs>
+            <pattern id="grid" width={gridStep * view.k} height={gridStep * view.k} x={view.x} y={view.y} patternUnits="userSpaceOnUse">
+              <circle cx={1} cy={1} r={1} fill="#CFCBC2" />
+            </pattern>
+          </defs>
+          {grid && gridStep > 0 && <rect width="100%" height="100%" fill="url(#grid)" />}
+          <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
+            {frameBox && (
+              <g className="frame">
+                <rect x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} fill={scene?.theme.colors.background} />
+                <text x={frameBox.x} y={frameBox.y - 8}>
+                  {frame![0]}:{frame![1]}
+                </text>
+              </g>
+            )}
+            {scene && <AnyContent scene={scene} ix={stableIx} />}
+            {frameBox && <rect className="frame-border" x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} />}
+            {guides.map((g, i) =>
+              g.axis === 'x' ? (
+                <line key={i} x1={g.value} x2={g.value} y1={-big} y2={big} className="guide" />
+              ) : (
+                <line key={i} y1={g.value} y2={g.value} x1={-big} x2={big} className="guide" />
+              ),
+            )}
+            {marquee && <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" />}
+          </g>
+        </svg>
+        {showSource && doc && (
+          <SourcePanel
+            file={doc.file}
+            source={doc.source}
+            layoutJson={serializeLayout(layout)}
+            highlighted={highlightedLines}
+            onLineClick={selectLine}
+            onClose={() => toggleSource(false)}
+          />
+        )}
       </div>
-      <footer className="help">
-        <span className="hint">
-          <b>Move</b> drag elements, labels, box titles
-        </span>
-        <span className="hint">
-          <b>Bend</b> pull a line; double-click a bend to remove
-        </span>
-        <span className="hint">
-          <b>Select</b> <kbd>⇧</kbd> click or drag
-        </span>
-        <span className="hint">
-          <b>No snap</b> <kbd>Alt</kbd>
-        </span>
-        <span className="hint">
-          <b>Pan</b> drag background
-        </span>
-        <span className="hint">
-          <b>Zoom</b> pinch, <kbd>⌘</kbd> scroll
-        </span>
-        <span className="hint">
-          <b>Unpin</b> <kbd>U</kbd>
-        </span>
-        <span className="hint">
-          <b>Undo</b> <kbd>⌘Z</kbd>
-        </span>
-      </footer>
     </div>
   );
 }

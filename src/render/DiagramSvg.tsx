@@ -161,9 +161,13 @@ function NodeViewImpl({ n, theme, ix, selected }: NodeProps) {
   }
 
   return (
-    <g data-id={n.node.id} onPointerDown={ix ? (e) => ix.onNodeDown(n.node.id, e) : undefined} style={ix ? { cursor: 'move' } : undefined}>
+    <g data-id={n.node.id} data-selected={selected || undefined} onPointerDown={ix ? (e) => ix.onNodeDown(n.node.id, e) : undefined} style={ix ? { cursor: 'move' } : undefined}>
       {ix && <rect x={box.x} y={box.y} width={box.w} height={box.h} fill="transparent" />}
       {body}
+      {/* Editor only: an outline that stays visible at any zoom, so a multi-selection reads at a glance. */}
+      {ix && selected && (
+        <rect x={f(box.x - 4)} y={f(box.y - 4)} width={f(box.w + 8)} height={f(box.h + 8)} fill="none" stroke={EDITOR_COLORS.selected} strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" pointerEvents="none" />
+      )}
       {ix?.showPins && n.pinned && <circle cx={f(box.x + box.w - 2)} cy={f(box.y + 2)} r={3} fill={EDITOR_COLORS.pinned} />}
     </g>
   );

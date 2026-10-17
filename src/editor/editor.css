@@ -65,35 +65,32 @@ body,
 
 .toolbar {
   flex: none;
-  background: var(--ground);
-  border-bottom: 2px solid var(--ink);
-}
-
-/* Head: nameplate left, instrument readout right. */
-.deck-head {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  height: 44px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--rule);
-}
-
-/* What is loaded: like the cassette window of a deck. */
-.loaded {
+  position: relative;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  background: var(--ground);
+  border-bottom: 2px solid var(--ink);
+  white-space: nowrap;
 }
 
-.loaded .group-label::after {
-  display: none;
+/* Thin silkscreen rule between control groups, where the old group labels were. */
+.sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--rule-strong);
 }
 
 .nameplate {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  margin-right: 4px;
   font-family: var(--f-label);
   line-height: 1;
   white-space: nowrap;
@@ -114,37 +111,37 @@ body,
   color: var(--ink-2);
 }
 
+/* Instrument readout: takes the slack between controls and Export, shrinks first. */
 .readout {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 16px;
+  gap: 8px;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 /* Recessed display window. */
 .toolbar .meta {
+  flex: none;
   display: flex;
   align-items: center;
-  height: 28px;
-  padding: 0 4px;
+  height: 24px;
+  padding: 0 2px;
   color: var(--ink-2);
   background: var(--face);
   border: 1px solid var(--rule-strong);
   border-top-color: #8f8b81;
   border-radius: var(--r);
   box-shadow: inset 0 1px 2px rgba(26, 26, 26, 0.1);
-}
-
-.toolbar .meta:empty {
-  display: none;
+  font-size: 11px;
 }
 
 .meta .cell {
-  padding: 0 12px;
+  padding: 0 8px;
   border-left: 1px solid var(--rule);
 }
 
@@ -162,6 +159,10 @@ body,
 
 .meta .stale .num {
   color: var(--signal);
+}
+
+.meta .selected .num {
+  color: var(--blue);
 }
 
 /* Working: a blue lamp. */
@@ -190,8 +191,7 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 80px;
-  justify-content: flex-end;
+  min-width: 56px;
   color: var(--ink-2);
   font-family: var(--f-label);
   font-size: 10px;
@@ -226,48 +226,6 @@ body,
   background: var(--signal);
 }
 
-/* Control deck: labelled groups on one baseline, wrapping as whole groups. */
-.deck {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px 20px;
-  padding: 8px 16px 12px;
-}
-
-.group {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.group-export {
-  margin-left: auto;
-}
-
-.group-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 12px;
-  font-family: var(--f-label);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-}
-
-/* Silkscreen rule after each label, spanning the group. */
-.group-label::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--rule-strong);
-}
-
 .keys {
   display: flex;
   align-items: center;
@@ -282,6 +240,7 @@ body,
 .toolbar select,
 .toolbar .toggle,
 .source-tabs button {
+  flex: none;
   font: 12px/16px var(--f-body);
   color: var(--ink);
   height: var(--h);
@@ -371,17 +330,41 @@ body,
 }
 
 .toolbar .file-select {
-  width: 232px;
-  max-width: 232px;
+  width: 176px;
 }
 
-.toolbar .theme-select {
-  width: 148px;
+.toolbar .theme-select,
+.toolbar .size-select {
+  width: 168px;
+  max-width: none;
 }
 
-.toolbar .size-select,
 .toolbar .frame-select {
-  width: 112px;
+  width: 104px;
+}
+
+/* Icon keys (undo, redo): square. */
+.toolbar button.icon {
+  width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar button.icon svg {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-linecap: square;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 /* The primary action: one signal colour on the whole panel. */
@@ -599,6 +582,20 @@ body,
   user-select: none;
 }
 
+.canvas.marquee-mode {
+  cursor: crosshair;
+}
+
+.canvas.panning,
+.canvas.panning * {
+  cursor: grab !important;
+}
+
+.canvas.panning:active,
+.canvas.panning:active * {
+  cursor: grabbing !important;
+}
+
 .workspace .canvas {
   flex: 1;
   min-width: 0;
@@ -788,37 +785,210 @@ body,
 .tok-arrow { color: var(--signal-down); font-weight: 700; }
 
 /* ------------------------------------------------------------------ */
-/* Footer                                                              */
+/* Popovers: rarer settings, export menu, key map                     */
 /* ------------------------------------------------------------------ */
 
-.help {
+.popover {
+  position: relative;
   flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 24px;
-  padding: 8px 16px;
-  color: var(--ink-2);
-  background: var(--ground);
-  border-top: 1px solid var(--rule-strong);
-  font-size: 11px;
-  line-height: 16px;
 }
 
-.help .hint {
+.toolbar .popover .opener {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The small black triangle says "opens", as on the selects. */
+.opener .caret {
+  fill: var(--ink);
+}
+
+.toolbar .popover .opener.active {
+  background: var(--key-down);
+  border-color: var(--ink-2);
+  box-shadow: inset 0 1px 2px rgba(26, 26, 26, 0.14);
+}
+
+.popover-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 20;
+  min-width: 200px;
+  padding: 12px;
+  background: var(--ground);
+  border: 1px solid var(--ink);
+  border-top-width: 2px;
+  border-radius: var(--r);
+  box-shadow: 0 4px 16px rgba(26, 26, 26, 0.16);
   white-space: nowrap;
 }
 
-.help b {
-  margin-right: 4px;
+.popover-panel.left {
+  left: 0;
+}
+
+.popover-panel.right {
+  right: 0;
+}
+
+.popover-panel[hidden] {
+  display: none;
+}
+
+/* Labelled rows: Futura small caps on the left, controls on the right. */
+.field {
+  display: grid;
+  grid-template-columns: 64px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.field + .field {
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.field-label,
+.keymap dt {
   font-family: var(--f-label);
   font-size: 10px;
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.field-keys {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.field-keys .stepper {
+  width: 168px;
+}
+
+.field-keys .stepper-label {
+  width: 60px;
+}
+
+.toolbar .field-keys .stepper .stepper-value {
+  flex: 1;
+}
+
+/* Split key: [Export SVG][▾]. */
+.keys.split {
+  gap: 0;
+}
+
+.keys.split > .primary {
+  border-radius: var(--r) 0 0 var(--r);
+}
+
+.toolbar .export-menu .opener {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+  margin-left: -1px;
+  border-radius: 0 var(--r) var(--r) 0;
+  background: var(--signal);
+  border-color: var(--signal-down);
+}
+
+.toolbar .export-menu .opener:hover:not(:disabled) {
+  background: #b93a13;
+  border-color: var(--signal-down);
+}
+
+.toolbar .export-menu .opener.active {
+  background: var(--signal-down);
+}
+
+.export-menu .opener .caret {
+  fill: #fff;
+}
+
+.popover-panel:has(.menu) {
+  padding: 4px;
+  min-width: 248px;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar .menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.toolbar .menu button:hover:not(:disabled) {
+  background: var(--key-hover);
+  border-color: var(--rule-strong);
+}
+
+.menu .hint {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.menu-rule {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--rule-strong);
+}
+
+.toolbar .help .opener {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  font-family: var(--f-label);
+  font-weight: 700;
+}
+
+.toolbar .help .opener .caret {
+  display: none;
+}
+
+.keymap {
+  display: grid;
+  grid-template-columns: 80px auto;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.keymap dt {
+  line-height: 16px;
   color: var(--ink);
 }
 
-.help kbd {
+.keymap dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.keymap-note {
+  margin: 12px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.keymap kbd {
   display: inline-block;
   min-width: 16px;
   height: 16px;
@@ -830,6 +1000,23 @@ body,
   border: 1px solid var(--rule-strong);
   border-bottom-color: #8f8b81;
   border-radius: var(--r);
+}
+
+/* The readout gets whatever width is left; counts drop out before anything is clipped. */
+.readout {
+  container-type: inline-size;
+}
+
+@container (max-width: 400px) {
+  .meta .cell.total {
+    display: none;
+  }
+}
+
+@container (max-width: 200px) {
+  .toolbar .meta {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

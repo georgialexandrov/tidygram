@@ -1,5 +1,6 @@
 import type { LayoutFile, Point } from '../layout/layout-file.ts';
 import type { Diagram } from '../model/types.ts';
+import { layoutPathFor } from '../paths.ts';
 import { pathLength } from '../scene/geometry.ts';
 
 /** Pure layout edits. Each returns a new LayoutFile; the editor keeps the old one for undo. */
@@ -21,6 +22,27 @@ export function moveNodes(
     if (via && origin[e.from] && origin[e.to]) edges[e.id] = { ...edges[e.id], via: via.map(([x, y]) => [x + dx, y + dy]) };
   }
   return { ...layout, nodes, edges };
+}
+
+/**
+ * Moves a selection by (dx, dy) and pins it: what a finished group drag or an
+ * arrow-key nudge writes. One call, so it is one undo step however many move.
+ * Ids without a stored position (not laid out yet) are skipped.
+ */
+export function moveSelection(layout: LayoutFile, diagram: Diagram, ids: Iterable<string>, dx: number, dy: number): LayoutFile {
+  const list = [...ids];
+  const origin = Object.fromEntries(list.filter((id) => layout.nodes[id]).map((id) => [id, layout.nodes[id]!]));
+  return setPinned(moveNodes(layout, diagram, origin, viaOf(layout), dx, dy), Object.keys(origin), true);
+}
+
+/** Every stored bend, by edge id: the origin a drag moves bends from. */
+export function viaOf(layout: LayoutFile): Record<string, Point[]> {
+  return Object.fromEntries(Object.entries(layout.edges).flatMap(([id, e]) => (e.via ? [[id, e.via]] : [])));
+}
+
+/** Download name of the sidecar for a diagram path: `dir/x.puml` → `x.layout.json`. */
+export function sidecarName(file: string): string {
+  return layoutPathFor(file).split('/').pop()!;
 }
 
 export function setPinned(layout: LayoutFile, ids: Iterable<string>, pinned: boolean): LayoutFile {
