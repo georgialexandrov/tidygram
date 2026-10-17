@@ -96,6 +96,67 @@ them in different folders.
 The parsers feed one format-neutral model (`src/model/types.ts`), so a new
 input is a new parser.
 
+## Conversion
+
+Any of the three formats converts into any other, with its layout:
+
+    pnpm render diagram.puml --to drawio            # → diagram-drawio.drawio
+    pnpm render diagram.drawio --to mermaid         # → diagram-mermaid.mmd + diagram-mermaid.layout.json
+    pnpm render diagram.mmd --to puml -o out/x.puml # → out/x.puml + out/x.layout.json
+    pnpm render diagram.puml --fit 16:9 --to drawio # layout options apply first
+
+Editor: Export menu → Convert to draw.io / PlantUML / Mermaid (browser
+downloads; PlantUML and Mermaid come as two files, the source and its
+layout.json). Code: `src/convert/` (`toPlantUml`, `toMermaid`,
+`toDrawio(diagram, layout, scene?)`, or `convert(diagram, layout, target)`),
+each returning `{ source, layout, warnings, ids }`.
+
+Default output names get a `-<format>` suffix because `x.puml` and `x.mmd`
+in one folder would share `x.layout.json`. Existing files aren't overwritten
+without `--force`, and an `-o` whose sidecar would be the input's is refused.
+
+**How layout travels.** PlantUML and Mermaid can't hold positions, so:
+
+- **→ draw.io** carries the whole picture: node and container boxes from the
+  built scene (children relative to their `container=1` parent), every
+  routed line's bends as waypoints with `edgeStyle=orthogonalEdgeStyle` and
+  its ends pinned where our router attached them. Reading the file back
+  gives the same boxes. No sidecar is written; the view's theme/frame stay
+  in the returned layout, size scaling is baked into the geometry.
+- **→ PlantUML / Mermaid** write source whose ids our parser reads back, plus
+  the sidecar re-keyed to those ids. Node ids are kept as aliases
+  (`component "Label" as "if: ok?"`, `id["Label"]`, Mermaid ``class `x` ``);
+  PlantUML derives edge ids from the arrow (`A-->B`), Mermaid keeps
+  word-like line ids with `id@-->`. Where an id can't be written it is
+  renamed and the old → new map (`ids`) re-keys the sidecar. PlantUML lines
+  get direction keywords (`-right->`) from the layout and the file gets
+  `left to right direction` / `flowchart LR` when most lines run sideways,
+  so plantuml.com and mermaid.live come closer; the sidecar holds the exact
+  picture.
+
+**What each target holds** (✅ round-trips; ≈ written with approximations,
+each warned once per kind):
+
+| Family | → PlantUML | → Mermaid | → draw.io |
+|---|---|---|---|
+| use case / component / deployment, draw.io | ✅ description syntax (draw.io's rounded boxes, diamonds, ellipses ≈ rectangle, hexagon, use case) | ≈ flowchart (actors, components, use cases ≈ boxes; triangle/diamond ends ≈ arrows; no end labels) | ✅ (use case ≈ ellipse, queue ≈ cylinder, storage ≈ rounded box) |
+| class / object | ✅ | ✅ classDiagram (compartments beyond fields/methods merge) | ≈ UML class tables (read back as entities, stereotypes lost) |
+| ER (crow's foot) | ✅ | ✅ erDiagram (rows reformatted to `type name PK "comment"`) | ✅ tables |
+| state | ✅ | ✅ stateDiagram-v2 (one arrow per transition; history ≈ state) | ≈ pseudo-states and states as ellipses/rounded boxes; descriptions lost |
+| C4 | ✅ C4 macros | ≈ flowchart, descriptions lost | ≈ boxes, descriptions lost |
+| ArchiMate, Chen, nwdiag, JSON/YAML | ≈ component/class syntax (filled-dot ends ≈ circle; JSON tables ≈ objects) | ≈ flowchart / classDiagram | ✅ / ≈ (JSON tables, network bars ≈ boxes) |
+| activity | ≈ component-style graph: activity syntax isn't regenerated from a graph | ≈ flowchart (decisions ≈ diamonds) | ≈ (decisions ≈ rhombus) |
+| mindmap / WBS | ✅ | ✅ mindmap (one root; WBS becomes a mindmap) | ≈ rounded boxes |
+| sequence | ✅ | ≈ (dividers, delays, spaces, lost/found messages, half/circle heads dropped) | not yet |
+| Gantt | ✅ (tasks pinned to dates; `->` keeps dependencies) | ≈ (dependencies kept as `after` where the dates agree; partial completion and colours other than crit lost) | not yet |
+| timing | ✅ | no Mermaid equivalent | not yet |
+
+Everywhere: PlantUML has no escape for `"` in labels (written as `'`) and
+its reader drops ` #word` / `$word` decorations; draw.io HTML labels collapse
+runs of spaces; note attachment and hidden lines don't survive draw.io; a
+note link reads back from draw.io as a dashed line. The full per-fixture
+list of losses is asserted in `tests/convert.test.ts` (`LOSSES`).
+
 ## Use
 
     pnpm install
@@ -219,7 +280,7 @@ size, which is why rendering stays SVG (crisp text, real DOM hit-testing,
 
 ## Test
 
-    pnpm test        # parser, layout merge, routing (no lines through elements, < 50 ms), fit, themes
+    pnpm test        # parser, layout merge, routing (no lines through elements, < 50 ms), fit, themes, conversion round trips
     pnpm typecheck
     node scripts/smoke.mjs out/editor.png   # with pnpm dev running: drag, bend, undo, theme, fit, in headless Chrome
     scripts/png.sh out/x.svg out/x.png 1800 # rasterise an SVG to look at it

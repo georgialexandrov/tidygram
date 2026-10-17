@@ -13,9 +13,11 @@ import { THEMES } from './scene/theme.ts';
 import { fitToFrame } from './layout/fit.ts';
 import { largestScale } from './layout/scale.ts';
 import { buildAnyScene } from './scene/any.ts';
-import { DIAGRAM_FILE, layoutPathFor } from './paths.ts';
+import { DIAGRAM_FILE, convertedPathFor, layoutPathFor } from './paths.ts';
+import { convert, TARGET_EXTENSION, type ConvertTarget } from './convert/index.ts';
 
 const USAGE = `Usage: pnpm render <diagram.puml|.mmd|.drawio> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
+       pnpm render <diagram> --to drawio|puml|mermaid [-o out] [--force] [layout options as above]
 
 Reads diagram.layout.json next to the diagram (if any), places nodes that have no
 position yet (draw.io: where the file draws them), routes the lines and writes an SVG. The completed layout is written
@@ -25,7 +27,11 @@ back unless --no-write is given.
   --reset      discard the stored layout and start over (draw.io: back to the file's layout)
   --fit W:H    re-arrange to fill a frame of that aspect ratio (16:9, 1:1, 210:297)
   --theme X    ${Object.keys(THEMES).join(' | ')} (stored in the layout file)
-  --scale N    size of text and icons (1 = 100%), or "max" for the largest that fits`;
+  --scale N    size of text and icons (1 = 100%), or "max" for the largest that fits
+  --to X       convert instead of rendering: writes the diagram in another format, with its
+               layout (draw.io: in the file; PlantUML/Mermaid: in a sidecar next to it).
+               Default output: diagram-<format>.<ext> next to the input, so the two never
+               share a sidecar. Existing files are not overwritten without --force.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -37,6 +43,8 @@ const { values, positionals } = parseArgs({
     theme: { type: 'string' },
     scale: { type: 'string' },
     'no-write': { type: 'boolean', default: false },
+    to: { type: 'string' },
+    force: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -82,12 +90,43 @@ if (values.scale) {
 
 const scene = buildAnyScene(diagram, layout, avoid);
 
-const out = values.out ?? file.replace(DIAGRAM_FILE, '') + '.svg';
-writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));
-console.log(`wrote ${out}`);
+if (values.to) writeConverted(values.to, file);
+else {
+  const out = values.out ?? file.replace(DIAGRAM_FILE, '') + '.svg';
+  writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));
+  console.log(`wrote ${out}`);
+}
 
 const after = serializeLayout(layout);
 if (!values['no-write'] && after !== before) {
   writeFileSync(layoutPath, after);
   console.log(`wrote ${layoutPath}`);
+}
+
+/** `--to`: the converted source, plus its sidecar for PlantUML and Mermaid, never on top of the input's own files. */
+function writeConverted(to: string, file: string) {
+  const targets: Record<string, ConvertTarget> = { drawio: 'drawio', puml: 'puml', plantuml: 'puml', mermaid: 'mermaid', mmd: 'mermaid' };
+  const target = targets[to.toLowerCase()];
+  if (!target) throw new Error(`--to expects drawio, puml or mermaid, got ${to}`);
+  const result = convert(diagram, layout, target, scene);
+  for (const w of result.warnings) console.warn(`${file}: ${w.message}`);
+  if (!result.source) process.exit(1);
+  const out = values.out ?? convertedPathFor(file, target, TARGET_EXTENSION[target]);
+  const sidecar = target === 'drawio' ? undefined : layoutPathFor(out);
+  const files = [out, ...(sidecar ? [sidecar] : [])];
+  if (sidecar && sidecar === layoutPath) {
+    console.error(`${out} would share ${sidecar} with ${file}; pick another name with -o`);
+    process.exit(1);
+  }
+  const existing = files.filter((f) => existsSync(f));
+  if (existing.length && !values.force) {
+    console.error(`not overwriting ${existing.join(' and ')} (use --force)`);
+    process.exit(1);
+  }
+  writeFileSync(out, result.source);
+  console.log(`wrote ${out}`);
+  if (sidecar) {
+    writeFileSync(sidecar, serializeLayout(result.layout));
+    console.log(`wrote ${sidecar}`);
+  }
 }

@@ -77,7 +77,7 @@ export function nodeShape(node: DNode, theme: Theme): NodeShape {
 }
 
 /** Icon kinds draw a figure of the theme's size with the label underneath; a file box can't size them. */
-const FREE_SIZE = new Set<NodeKind>([...ICON_KINDS, 'actor']);
+export const FREE_SIZE = new Set<NodeKind>([...ICON_KINDS, 'actor']);
 
 /** How much of a file box's width text may use, by outline: ellipses and diamonds narrow towards the edges. */
 const TEXT_SHARE: Record<Anchor['shape'], number> = { rect: 1, pill: 0.85, ellipse: 0.75, diamond: 0.55 };

@@ -16,6 +16,7 @@ import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
 import { THEMES } from '../scene/theme.ts';
 import { fitToFrame } from '../layout/fit.ts';
 import { largestScale } from '../layout/scale.ts';
+import { convert, TARGET_EXTENSION, type ConvertTarget } from '../convert/index.ts';
 
 const SIZES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 import { alignmentSnap, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
@@ -688,6 +689,32 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     download(new Blob([serializeLayout(layoutRef.current)], { type: 'application/json' }), sidecarName(doc.file));
   }, [doc]);
 
+  /**
+   * The diagram in another format, as downloads: draw.io carries the layout
+   * in the file; PlantUML/Mermaid come with their own sidecar. Named
+   * `name-<format>` so a copy dropped next to the original never shares its
+   * layout.json.
+   */
+  const exportConverted = useCallback(
+    (target: ConvertTarget) => {
+      if (!doc) return;
+      const result = convert(doc.diagram, layoutRef.current, target, scene ?? undefined);
+      if (!result.source) {
+        setError(result.warnings.map((w) => w.message).join('; '));
+        return;
+      }
+      const stem = `${baseName}-${target}`;
+      download(new Blob([result.source], { type: 'text/plain' }), `${stem}${TARGET_EXTENSION[target]}`);
+      // Browsers drop a second download started in the same tick.
+      if (target !== 'drawio') window.setTimeout(() => download(new Blob([serializeLayout(result.layout)], { type: 'application/json' }), `${stem}.layout.json`), 300);
+      if (result.warnings.length) {
+        console.warn(result.warnings.map((w) => w.message).join('\n'));
+        flash(`Converted with ${result.warnings.length} approximation${result.warnings.length > 1 ? 's' : ''} (see console)`);
+      }
+    },
+    [doc, scene, baseName, flash],
+  );
+
   const copyLayout = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(serializeLayout(layoutRef.current));
@@ -974,7 +1001,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           <button className="primary" onClick={exportSvg} title="Download the laid-out diagram as SVG">
             Export SVG
           </button>
-          <Popover label={<span className="sr-only">More export</span>} title="More export: PNG, layout.json" className="export-menu" align="right">
+          <Popover label={<span className="sr-only">More export</span>} title="More export: PNG, layout.json, convert to draw.io / PlantUML / Mermaid" className="export-menu" align="right">
             {(close) => (
               <div className="menu" role="menu">
                 <button role="menuitem" onClick={() => (close(), exportSvg())}>
@@ -992,6 +1019,16 @@ export function Editor({ avoid }: { avoid: Avoid }) {
                 </button>
                 <button role="menuitem" data-action="import-layout" onClick={() => (close(), importInput.current?.click())}>
                   Import layout JSON… <span className="hint">undoable</span>
+                </button>
+                <span className="menu-rule" aria-hidden="true" />
+                <button role="menuitem" data-action="convert-drawio" onClick={() => (close(), exportConverted('drawio'))}>
+                  Convert to draw.io <span className="hint">layout in file</span>
+                </button>
+                <button role="menuitem" data-action="convert-puml" onClick={() => (close(), exportConverted('puml'))}>
+                  Convert to PlantUML <span className="hint">+ layout.json</span>
+                </button>
+                <button role="menuitem" data-action="convert-mermaid" onClick={() => (close(), exportConverted('mermaid'))}>
+                  Convert to Mermaid <span className="hint">+ layout.json</span>
                 </button>
               </div>
             )}
