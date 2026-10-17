@@ -44,7 +44,7 @@ export interface TemplateHexagon {
  * so are slides. All ring maths happens in a space squeezed horizontally by
  * this factor, where the rings are circles.
  */
-export const RING_ASPECT = 1.5;
+export const RING_ASPECT = 1.8;
 
 export interface TemplateRing {
   id: string;
@@ -305,8 +305,11 @@ export function cleanRings(layers: LayerDef[], members: Map<string, Box[]>, them
     const boxes = members.get(l.id) ?? [];
     const inner = r;
     const reach = boxes.length ? Math.max(...boxes.map((b) => cornerDistance(b, center))) : 0;
-    r = Math.max(inner + m.empty, boxes.length ? reach + m.pad + m.titleHeight + m.pad * 0.5 : 0);
     const text = titleBlock(l.label, theme);
+    // The title needs room only at the top, over the members below it; elsewhere the padding is enough.
+    const under = boxes.filter((b) => Math.abs(b.x + b.w / 2 - center[0]) < text.width / 2 + b.w / 2 + m.pad && b.y < center[1]);
+    const titleRoom = under.length ? Math.max(...under.map((b) => center[1] - b.y)) + m.titleHeight + m.pad * 1.5 : 0;
+    r = Math.max(inner + m.empty, boxes.length ? Math.max(reach + m.pad, titleRoom) : 0);
     rings.push({ id: l.id, r, inner, fill: fillAt(theme, layers.length - 1 - i, layers.length), title: { text, x: center[0], y: center[1] - r + m.pad * 0.5, align: 'middle' } });
   });
   return rings;

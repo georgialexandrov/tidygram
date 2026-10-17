@@ -176,6 +176,8 @@ export interface DEdge {
 export interface Diagram {
   family: DiagramFamily;
   direction: 'TB' | 'LR';
+  /** The source states the direction (`top to bottom direction`, `flowchart TD`): auto layout keeps it. LR is always kept. */
+  directionFixed?: boolean;
   nodes: DNode[];
   containers: DContainer[];
   edges: DEdge[];

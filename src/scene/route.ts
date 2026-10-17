@@ -27,11 +27,19 @@ export const ROUTING = {
   crossingPenalty: 0,
 };
 
-/** Routes every connector orthogonally around the node boxes. Returns centre-to-centre polylines. */
-export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, requests: RouteRequest[]): Map<string, Point[]> {
+/**
+ * Routes every connector orthogonally around the node boxes and `obstacles`
+ * (container walls, titles). Returns centre-to-centre polylines.
+ *
+ * The clearance round nodes is added here instead of by libavoid's
+ * `shapeBufferDistance`, which applies to every shape alike: walls need a
+ * thin margin of their own, or a line could pass neither between a node and
+ * its container's border nor between two containers.
+ */
+export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, requests: RouteRequest[], obstacles: Box[] = []): Map<string, Point[]> {
   const A = avoid;
   const router = new A.Router(A.RouterFlag.OrthogonalRouting.value);
-  router.setRoutingParameter(A.RoutingParameter.shapeBufferDistance, ROUTING.shapeBuffer);
+  router.setRoutingParameter(A.RoutingParameter.shapeBufferDistance, 0);
   router.setRoutingParameter(A.RoutingParameter.idealNudgingDistance, ROUTING.nudging);
   router.setRoutingParameter(A.RoutingParameter.segmentPenalty, ROUTING.segmentPenalty);
   if (ROUTING.crossingPenalty) router.setRoutingParameter(A.RoutingParameter.crossingPenalty, ROUTING.crossingPenalty);
@@ -40,12 +48,15 @@ export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, reques
 
   const refs = new Map<string, unknown>();
   for (const [id, s] of shapes) {
-    const { x, y, w, h } = s.box;
+    const b = ROUTING.shapeBuffer;
+    const { x, y, w, h } = { x: s.box.x - b, y: s.box.y - b, w: s.box.w + 2 * b, h: s.box.h + 2 * b };
     const ref = new A.ShapeRef(router, new A.Rectangle(new A.Point(x + w / 2, y + h / 2), w, h));
     const pin = new A.ShapeConnectionPin(ref, 1, 0.5, 0.5, true, 0, CONN_DIR_ALL);
     pin.setExclusive(false);
     refs.set(id, ref);
   }
+
+  for (const { x, y, w, h } of obstacles) new A.ShapeRef(router, new A.Rectangle(new A.Point(x + w / 2, y + h / 2), w, h));
 
   const conns: [string, { displayRoute(): { size(): number; at(i: number): { x: number; y: number } } }][] = [];
   const result = new Map<string, Point[]>();

@@ -18,7 +18,7 @@ import { sourceItems } from '../model/items.ts';
 import type { Avoid } from '../scene/avoid.ts';
 import { ancestry, type Box } from '../scene/containers.ts';
 import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
-import { THEMES } from '../scene/theme.ts';
+import { THEMES, themeFor } from '../scene/theme.ts';
 import { fitToFrame } from '../layout/fit.ts';
 import { largestScale } from '../layout/scale.ts';
 import { convert, formatOf as sourceFormatOf, TARGET_EXTENSION, type ConvertResult, type ConvertTarget } from '../convert/index.ts';
@@ -526,7 +526,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       setSelEdge(id);
       setSelNodes(new Set());
       const l = layoutRef.current;
-      drag.current = { kind: 'label', id, start: toDiagram(e.clientX, e.clientY), origin: l.edges[id]?.label ?? [0, 0], before: l, moved: false };
+      // Without a stored offset the label sits where placement put it: drag from there, not from the middle.
+      const s = sceneRef.current;
+      const placed = s?.kind === 'graph' ? s.edges.find((x) => x.edge.id === id)?.label?.offset : undefined;
+      drag.current = { kind: 'label', id, start: toDiagram(e.clientX, e.clientY), origin: l.edges[id]?.label ?? placed ?? [0, 0], before: l, moved: false };
       capture(e);
     },
     onViaDown(id, index, e) {
@@ -1181,7 +1184,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           <Popover label="Display" title="Theme, size, text and icon scale, grid" className="display">
             <div className="field">
               <span className="field-label">Theme</span>
-              <select className="theme-select" value={layout.view?.theme ?? 'classic'} onChange={(e) => updateViewSettings({ theme: e.target.value })} title="Theme">
+              <select className="theme-select" value={themeFor(layout.view?.theme).name} onChange={(e) => updateViewSettings({ theme: e.target.value })} title="Theme">
                 {Object.values(THEMES).map((t) => (
                   <option key={t.name} value={t.name}>
                     {t.label}

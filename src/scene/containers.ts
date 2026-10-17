@@ -1,5 +1,8 @@
 import type { DNode, Diagram } from '../model/types.ts';
+import type { Point } from '../layout/layout-file.ts';
+import { LINE_HEIGHT, textWidth } from './measure.ts';
 import { CONTAINER_PAD, type NodeShape, type Pad } from './shapes.ts';
+import type { Theme } from './theme.ts';
 
 export interface Box {
   x: number;
@@ -112,4 +115,148 @@ export function ancestry(diagram: Diagram, parent: string | undefined): string[]
     current = diagram.containers.find((c) => c.id === current)?.parent;
   }
   return chain;
+}
+
+/**
+ * Where a container's title text sits, mirroring `ContainerTitle` in
+ * DiagramSvg: centred under the top edge, or left-aligned small caps. Lines
+ * route around it and labels avoid it. Padded by a few pixels so a line
+ * doesn't graze the letters.
+ */
+export function titleBox(kind: string, label: string, box: Box, theme: Theme): Box | undefined {
+  if (!label.trim()) return undefined;
+  const k = theme.scale;
+  const state = kind === 'state';
+  const caps = !state && theme.containerTitle === 'caps';
+  const size = state ? theme.size.node : theme.size.container;
+  const text = caps ? label.toUpperCase() : label;
+  // Caps are drawn with 0.08em letter spacing.
+  const width = Math.min(box.w - 4 * k, (textWidth(text, size, true, theme.widthFactor) + (caps ? text.length * size * 0.08 : 0)) * 1.06);
+  const height = size * LINE_HEIGHT;
+  const d3 = kind === 'node' ? 8 * k : 0;
+  const top = state ? box.y + 13 * k - height / 2 : box.y + (caps ? 10 * k + d3 : 6 * k);
+  const left = caps ? box.x + 14 * k : box.x + box.w / 2 - width / 2;
+  // The title's backing chip reaches 4 px either side and 1 px above and below.
+  const mx = 5 * k;
+  const my = 2 * k;
+  return { x: left - mx, y: top - my, w: width + 2 * mx, h: height + 2 * my };
+}
+
+export type Side = 'top' | 'bottom' | 'left' | 'right';
+
+/** An opening in a container's border where a line may cross it: `lo..hi` along the side. */
+export interface Door {
+  container: string;
+  side: Side;
+  lo: number;
+  hi: number;
+}
+
+/** Keeps a door this far from the corners, so lines don't squeeze round them. */
+const CORNER = 10;
+
+/** The side of `box` that faces `outer` most: the one `outer` lies furthest beyond. */
+export function facingSide(box: Box, outer: Point, inner: Box): Side {
+  const [ox, oy] = outer;
+  const beyond: [Side, number][] = [
+    ['right', ox - (box.x + box.w)],
+    ['left', box.x - ox],
+    ['bottom', oy - (box.y + box.h)],
+    ['top', box.y - oy],
+  ];
+  beyond.sort((a, b) => b[1] - a[1]);
+  if (beyond[0]![1] > 0) return beyond[0]![0];
+  // The other end overlaps the container (a hand-made overlap): leave by the side nearest the inner end.
+  const near: [Side, number][] = [
+    ['right', box.x + box.w - (inner.x + inner.w)],
+    ['left', inner.x - box.x],
+    ['bottom', box.y + box.h - (inner.y + inner.h)],
+    ['top', inner.y - box.y],
+  ];
+  near.sort((a, b) => a[1] - b[1]);
+  return near[0]![0];
+}
+
+/**
+ * The door a line from `inner` (a box inside the container) to `outer` (a
+ * point outside) goes through: on the facing side, straight across from the
+ * inner end. Wider doors (up to straight across from the outer end) let
+ * unrelated lines in through one door and out through another. Doors never
+ * open under the title: the title is part of the wall. `wide` opens the
+ * whole side, for a line that found no way through the narrow door.
+ */
+export function doorFor(container: string, box: Box, inner: Box, outer: Point, title?: Box, wide = false, blocked?: (side: Side) => boolean): Door {
+  let side = facingSide(box, outer, inner);
+  if (blocked?.(side)) {
+    // Something inside stands between the inner end and that side: leave by another side that faces the other end, if one is clear.
+    const [ox, oy] = outer;
+    const beyond: [Side, number][] = [
+      ['right', ox - (inner.x + inner.w)],
+      ['left', inner.x - ox],
+      ['bottom', oy - (inner.y + inner.h)],
+      ['top', inner.y - oy],
+    ];
+    const other = beyond.filter(([s, d]) => s !== side && d > 0 && !blocked(s)).sort((a, b) => b[1] - a[1])[0];
+    if (other) side = other[0];
+  }
+  const vertical = side === 'top' || side === 'bottom';
+  const min = (vertical ? box.x : box.y) + CORNER;
+  const max = (vertical ? box.x + box.w : box.y + box.h) - CORNER;
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  const o = clamp(vertical ? outer[0] : outer[1]);
+  let lo = wide ? min : clamp((vertical ? inner.x : inner.y) - 4);
+  let hi = wide ? max : clamp((vertical ? inner.x + inner.w : inner.y + inner.h) + 4);
+  if (side === 'top' && title && hi > title.x && lo < title.x + title.w) {
+    // Keep the larger part beside the title; with none left, open right next to it, on the side towards the line.
+    const left: [number, number] = [lo, Math.min(hi, title.x - 6)];
+    const right: [number, number] = [Math.max(lo, title.x + title.w + 6), hi];
+    const best = left[1] - left[0] >= right[1] - right[0] ? left : right;
+    if (best[1] - best[0] >= 16) [lo, hi] = best;
+    else if (o < title.x + title.w / 2 && title.x - 34 >= min) [lo, hi] = [title.x - 34, title.x - 6];
+    else [lo, hi] = [title.x + title.w + 6, Math.min(max, title.x + title.w + 34)];
+  }
+  return { container, side, lo, hi };
+}
+
+/**
+ * A container's border as obstacles, with gaps at its doors and wherever an
+ * element already blocks the border (overlapping obstacles confuse
+ * libavoid). Lines without a door can't cross it, so a line between two
+ * outside elements goes round the container instead of through it.
+ *
+ * The band reaches `outer` outside the border and `inner` inside (`top`
+ * inside along the top, where the title sits): thick enough inside that a
+ * line can't run along the border, where it would read as part of it.
+ */
+export function wallsFor(box: Box, doors: Door[], blockers: Box[], band: { outer: number; inner: number; top: number }): Box[] {
+  const { outer, inner, top } = band;
+  const walls: Box[] = [];
+  // [side, near edge of the band, far edge, from, to]: top and bottom run the full width, the sides between them.
+  const sides: [Side, number, number, number, number][] = [
+    ['top', box.y - outer, box.y + top, box.x - outer, box.x + box.w + outer],
+    ['bottom', box.y + box.h - inner, box.y + box.h + outer, box.x - outer, box.x + box.w + outer],
+    ['left', box.x - outer, box.x + inner, box.y + top, box.y + box.h - inner],
+    ['right', box.x + box.w - inner, box.x + box.w + outer, box.y + top, box.y + box.h - inner],
+  ];
+  for (const [side, near, far, from, to] of sides) {
+    const vertical = side === 'top' || side === 'bottom';
+    const gaps: [number, number][] = doors.filter((d) => d.side === side).map((d) => [d.lo, d.hi]);
+    const strip: Box = vertical ? { x: from, y: near, w: to - from, h: far - near } : { x: near, y: from, w: far - near, h: to - from };
+    for (const b of blockers) {
+      if (overlaps(strip, b)) gaps.push(vertical ? [b.x, b.x + b.w] : [b.y, b.y + b.h]);
+    }
+    gaps.sort((a, b) => a[0] - b[0]);
+    let cursor = from;
+    const pieces: [number, number][] = [];
+    for (const [lo, hi] of gaps) {
+      if (lo > cursor) pieces.push([cursor, lo]);
+      cursor = Math.max(cursor, hi);
+    }
+    if (cursor < to) pieces.push([cursor, to]);
+    for (const [lo, hi] of pieces) {
+      if (hi - lo < 12) continue;
+      walls.push(vertical ? { x: lo, y: near, w: hi - lo, h: far - near } : { x: near, y: lo, w: far - near, h: hi - lo });
+    }
+  }
+  return walls;
 }

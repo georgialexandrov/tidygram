@@ -17,7 +17,7 @@ export interface GanttScene {
   theme: Theme;
   labelWidth: number;
   header: { months: { x: number; w: number; label: TextBlock }[]; days: { x: number; w: number; label?: TextBlock; closed: boolean }[]; height: number };
-  rows: { task: GanttTask; y: number; h: number; label: TextBlock; bar: Box; done?: number }[];
+  rows: { task: GanttTask; y: number; h: number; label: TextBlock; bar: Box; done?: number; indent: number }[];
   sections: { y: number; label: TextBlock }[];
   deps: { from: [number, number]; to: [number, number] }[];
   grid: { x: number; y0: number; y1: number; strong: boolean }[];
@@ -34,8 +34,10 @@ export function buildGanttScene(model: GanttModel, layout: LayoutFile): GanttSce
   const total = Math.max(1, ...model.tasks.map((t) => t.start + Math.max(1, t.duration))) + 1;
   // Long projects get narrower days; weekly print scale too.
   const dayW = (model.scale === 'weekly' || total > 120 ? 6 : model.scale === 'monthly' ? 3 : 22) * k * gx;
-  const rowH = 26 * k * gy;
-  const labelWidth = Math.max(120 * k, ...model.tasks.map((t) => measure(t.name).width + 24 * k));
+  const rowH = 28 * k * gy;
+  // Tasks under a section are indented under its heading, so the column reads as an outline.
+  const indent = model.tasks.some((t) => t.section) ? 12 * k : 0;
+  const labelWidth = Math.max(120 * k, ...model.tasks.map((t) => measure(t.name).width + 28 * k + (t.section ? indent : 0)), ...model.tasks.map((t) => (t.section ? measure(t.section.toUpperCase(), theme.size.edge, true).width + 0.08 * theme.size.edge * t.section.length + 28 * k : 0)));
   const x0 = labelWidth;
   const startDate = model.start ? new Date(`${model.start}T00:00:00Z`) : undefined;
   const dateOf = (day: number) => (startDate ? new Date(startDate.getTime() + day * 86_400_000) : undefined);
@@ -65,13 +67,14 @@ export function buildGanttScene(model: GanttModel, layout: LayoutFile): GanttSce
   for (const task of model.tasks) {
     if (task.section !== section && task.section) {
       section = task.section;
-      sections.push({ y: y + 4 * k, label: measure(task.section, theme.size.note, true) });
-      y += 24 * k;
+      const first = !sections.length;
+      sections.push({ y: y + (first ? 6 : 14) * k, label: measure(task.section, theme.size.edge, true) });
+      y += (first ? 26 : 34) * k;
     }
     const bx = x0 + task.start * dayW;
-    const bh = rowH * 0.62;
+    const bh = Math.min(rowH * 0.6, 16 * k * Math.sqrt(gy));
     const bar = task.milestone ? { x: bx - bh / 2, y: y + (rowH - bh) / 2, w: bh, h: bh } : { x: bx + 1, y: y + (rowH - bh) / 2, w: Math.max(4, task.duration * dayW - 2), h: bh };
-    const row: GanttScene['rows'][number] = { task, y, h: rowH, label: measure(task.name), bar };
+    const row: GanttScene['rows'][number] = { task, y, h: rowH, label: measure(task.name), bar, indent: task.section ? indent : 0 };
     if (task.completion !== undefined) row.done = task.completion / 100;
     rows.push(row);
     y += rowH;

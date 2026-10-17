@@ -42,6 +42,7 @@ export function parseMermaidClass(lines: Line[]): ParseResult {
   /** Open `{` blocks: a namespace id, or a class whose body we are reading. */
   const stack: ({ namespace: string } | { body: DNode })[] = [];
   let dir: Diagram['direction'] = 'TB';
+  let fixed = false;
   let notes = 0;
 
   const namespace = () => {
@@ -92,6 +93,7 @@ export function parseMermaidClass(lines: Line[]): ParseResult {
     const d = direction(text);
     if (d) {
       dir = d;
+      fixed = true;
       continue;
     }
     if (IGNORED.test(text)) continue;
@@ -167,7 +169,7 @@ export function parseMermaidClass(lines: Line[]): ParseResult {
     const fields = list.filter((m) => !m.includes('('));
     node.compartments = methods.length && node.classKind !== 'enum' ? [fields, methods] : [list];
   }
-  return { diagram: { family: 'class', direction: dir, nodes: [...nodes.values()], containers, edges }, warnings };
+  return { diagram: { family: 'class', direction: dir, ...(fixed ? { directionFixed: true } : {}), nodes: [...nodes.values()], containers, edges }, warnings };
 }
 
 // ---- state -------------------------------------------------------------------------------------
@@ -185,6 +187,7 @@ export function parseMermaidState(lines: Line[]): ParseResult {
   /** States only seen in transitions; a later `state X {` turns them into a composite. */
   const implicit = new Set<string>();
   let dir: Diagram['direction'] = 'TB';
+  let fixed = false;
   let pendingNote: { node: DNode; body: string[] } | undefined;
   const notes = new Map<string, number>();
 
@@ -226,7 +229,10 @@ export function parseMermaidState(lines: Line[]): ParseResult {
     }
     const d = direction(text);
     if (d) {
-      if (!stack.length) dir = d;
+      if (!stack.length) {
+        dir = d;
+        fixed = true;
+      }
       continue;
     }
     if (IGNORED.test(text) || /^class\s+[\w,\s]+\s+[\w-]+$/.test(text) || /^(--|\|\|)$/.test(text)) continue;
@@ -301,7 +307,7 @@ export function parseMermaidState(lines: Line[]): ParseResult {
   }
   if (pendingNote) warnings.push({ line: pendingNote.node.line, text: '', message: 'note without end note' });
   if (stack.length) warnings.push({ line: lines.at(-1)?.no ?? 1, text: '', message: `state ${stack.at(-1)} without }` });
-  return { diagram: { family: 'state', direction: dir, nodes: [...nodes.values()], containers: [...containers.values()], edges }, warnings };
+  return { diagram: { family: 'state', direction: dir, ...(fixed ? { directionFixed: true } : {}), nodes: [...nodes.values()], containers: [...containers.values()], edges }, warnings };
 }
 
 // ---- ER ----------------------------------------------------------------------------------------
@@ -336,6 +342,7 @@ export function parseMermaidEr(lines: Line[]): ParseResult {
   const nodes = new Map<string, DNode>();
   const { edges, add } = edgeBuilder();
   let dir: Diagram['direction'] = 'TB';
+  let fixed = false;
   let body: { node: DNode; keys: string[]; rest: string[] } | undefined;
 
   const entity = (name: string, line: number): DNode => {
@@ -370,6 +377,7 @@ export function parseMermaidEr(lines: Line[]): ParseResult {
     const d = direction(text);
     if (d) {
       dir = d;
+      fixed = true;
       continue;
     }
     if (IGNORED.test(text)) continue;
@@ -405,5 +413,5 @@ export function parseMermaidEr(lines: Line[]): ParseResult {
     warnings.push({ line: no, text: raw, message: 'Unsupported line, ignored' });
   }
   if (body) warnings.push({ line: body.node.line, text: '', message: 'Entity without }' });
-  return { diagram: { family: 'class', direction: dir, nodes: [...nodes.values()], containers: [], edges }, warnings };
+  return { diagram: { family: 'class', direction: dir, ...(fixed ? { directionFixed: true } : {}), nodes: [...nodes.values()], containers: [], edges }, warnings };
 }

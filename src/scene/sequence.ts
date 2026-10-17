@@ -22,6 +22,11 @@ export interface SeqMessage {
   y: number;
   self: boolean;
   label?: { text: TextBlock; x: number; y: number; align: 'middle' | 'start' };
+  /**
+   * Modern themes: the autonumber as a bubble left of the label (PlantUML
+   * keeps it inline in the text). `x` is the bubble centre.
+   */
+  number?: { text: string; x: number; y: number; r: number };
 }
 
 export interface SequenceScene {
@@ -55,11 +60,17 @@ const HEAD_KIND: Record<string, NodeKind> = {
   queue: 'queue',
 };
 
+/** Diameter (plus an 8px gap) of an autonumber bubble: fits the digits, never narrower than a circle. */
+function bubbleSizeFor(theme: Theme) {
+  return (n: string) => Math.max(theme.size.edge * 1.45, measureText(n, theme.size.edge * 0.82, true, theme.widthFactor).width + theme.size.edge * 0.7) + 8 * theme.scale;
+}
+
 export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): SequenceScene {
   const theme = themeOf(layout.view);
   const k = theme.scale;
   const [gapX, gapY] = layout.view?.spacing ?? [1, 1];
   const measure = (t: string, size = theme.size.edge) => measureText(t, size, false, theme.widthFactor);
+  const bubbleSize = bubbleSizeFor(theme);
 
   // Participant header shapes, reusing the element shapes so every theme applies.
   const headNode = (p: SeqParticipant): DNode => ({ id: p.id, kind: HEAD_KIND[p.kind] ?? 'rectangle', label: p.label, stereotype: p.stereotype, line: p.line });
@@ -168,12 +179,14 @@ export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): Se
   for (const e of model.events) {
     switch (e.type) {
       case 'message': {
-        const text = e.label !== undefined || e.number ? measure([e.number, e.label].filter(Boolean).join(' ')) : undefined;
+        const bubble = !theme.plantuml && e.number ? bubbleSize(e.number) : 0;
+        const text = e.label !== undefined || e.number ? measure((bubble ? [e.label] : [e.number, e.label]).filter(Boolean).join(' ') || ' ') : undefined;
         if (e.from === e.to) {
           const x = attach(e.from, true);
           row((text?.height ?? 0) + 6 * k);
           const m: SeqMessage = { e, x1: x, x2: x + 30 * k, y, self: true };
-          if (text) m.label = { text, x: x + 36 * k, y: y + 9 * k, align: 'start' };
+          if (text) m.label = { text, x: x + 36 * k + (bubble ? bubble - 4 * k : 0), y: y + 9 * k, align: 'start' };
+          if (bubble) m.number = { text: e.number!, x: x + 36 * k + bubble / 2 - 4 * k, y: y + 9 * k, r: bubble / 2 - 4 * k };
           messages.push(m);
           touch(x, x + 36 * k + (text?.width ?? 0));
           row(26 * k);
@@ -192,7 +205,14 @@ export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): Se
         }
         const x1 = attach(e.from, rightwards);
         const m: SeqMessage = { e, x1, x2, y, self: false };
-        if (text) m.label = { text, x: (x1 + x2) / 2, y: y - text.height / 2 - 3 * k, align: 'middle' };
+        if (text) m.label = { text, x: (x1 + x2) / 2 + bubble / 2, y: y - text.height / 2 - 3 * k, align: 'middle' };
+        if (text && bubble) {
+          const empty = e.label === undefined || e.label === '';
+          // The bubble sits just left of the label text (the label was shifted right by half a bubble).
+          const cx = empty ? (x1 + x2) / 2 : (x1 + x2) / 2 - text.width / 2;
+          m.number = { text: e.number!, x: cx, y: m.label!.y, r: bubble / 2 - 4 * k };
+          if (empty) m.label = undefined;
+        }
         messages.push(m);
         touch(Math.min(x1, x2), Math.max(x1, x2));
         row(14 * k + (created.get(e.to) !== undefined && created.get(e.to)! > y - headH ? shapes.get(e.to)!.h / 2 : 0));

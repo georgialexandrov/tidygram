@@ -1,6 +1,6 @@
 import type { DNode, NodeKind } from '../model/types.ts';
 import { LINE_HEIGHT, measureText, type TextBlock } from './measure.ts';
-import type { Theme } from './theme.ts';
+import { archimateLayer, type Theme } from './theme.ts';
 
 /** Where lines attach, as offsets from the node centre. */
 export interface Anchor {
@@ -47,7 +47,91 @@ export interface NodeShape {
   compartments?: TextBlock[];
   /** Icon kinds: icon box size; the label sits below it. */
   icon?: { w: number; h: number };
+  /** Class-like boxes: member rows split into aligned columns (marker, name, type). */
+  members?: MemberLayout;
+  /** ArchiMate elements: the layer (fill) and type glyph drawn in the corner instead of a stereotype. */
+  archimate?: { layer: string; type: string };
 }
+
+/** One class member / ER column / JSON entry, split for column alignment. */
+export interface MemberRow {
+  /** UML visibility: + public, - private, # protected, ~ package. */
+  vis?: '+' | '-' | '#' | '~';
+  /** ER keys (PK, FK, UK) as written. */
+  key?: string;
+  /** IE notation `*`: mandatory. */
+  required?: boolean;
+  method: boolean;
+  isStatic?: boolean;
+  isAbstract?: boolean;
+  name: string;
+  type?: string;
+}
+
+export interface MemberLayout {
+  rows: MemberRow[][];
+  /** Column widths: marker (visibility glyph or key badge), name, gap, type. */
+  marker: number;
+  name: number;
+  gap: number;
+  type: number;
+  rowH: number;
+  /** Vertical padding of each compartment, above and below its rows. */
+  pad: number;
+  size: number;
+}
+
+/**
+ * Splits a member line the way it reads: `-id : UUID`, `+total() : Money`,
+ * `{static} +of(x) : Money`, `* id : bigint <<PK>>` (PlantUML IE),
+ * `id : bigint PK — comment` (Mermaid ER), `key: value` (JSON tables).
+ */
+export function parseMember(line: string, json = false): MemberRow {
+  if (json) {
+    const i = line.indexOf(': ');
+    return i > 0 ? { method: false, name: line.slice(0, i), type: line.slice(i + 2) } : { method: false, name: line };
+  }
+  let rest = line.trim();
+  const row: MemberRow = { method: false, name: '' };
+  for (;;) {
+    const m = /^\{(static|classifier|abstract)\}\s*/.exec(rest);
+    if (!m) break;
+    if (m[1] === 'abstract') row.isAbstract = true;
+    else row.isStatic = true;
+    rest = rest.slice(m[0].length);
+  }
+  if (/^\*\s/.test(rest)) {
+    row.required = true;
+    rest = rest.slice(2).trim();
+  }
+  const vis = /^([+\-#~])\s*(?=\S)/.exec(rest);
+  if (vis && rest.length > 1) {
+    row.vis = vis[1] as MemberRow['vis'];
+    rest = rest.slice(vis[0].length);
+  }
+  const keys: string[] = [];
+  rest = rest.replace(/\s*<<\s*(PK|FK|UK)\s*>>/g, (_, key: string) => (keys.push(key), ''));
+  const mermaidKeys = /\s((?:PK|FK|UK)(?:\s*,\s*(?:PK|FK|UK))*)(?=\s+—|$)/.exec(rest);
+  if (mermaidKeys) {
+    keys.push(...mermaidKeys[1]!.split(/\s*,\s*/));
+    rest = rest.slice(0, mermaidKeys.index) + rest.slice(mermaidKeys.index + mermaidKeys[0].length);
+  }
+  if (keys.length) row.key = keys.join(' ');
+  // `name : type`, split at the last ` : ` outside parentheses (method arguments have their own).
+  let depth = 0;
+  let split = -1;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === '(' || ch === '<' || ch === '[') depth++;
+    else if (ch === ')' || ch === '>' || ch === ']') depth--;
+    else if (ch === ':' && depth === 0 && rest[i - 1] === ' ') split = i;
+  }
+  row.name = (split > 0 ? rest.slice(0, split) : rest).trim();
+  if (split > 0) row.type = rest.slice(split + 1).trim();
+  row.method = row.name.includes('(');
+  return row;
+}
+
 
 const wrap = (text: string, width = 34) =>
   text
@@ -262,41 +346,98 @@ function themedShape(node: DNode, theme: Theme): NodeShape {
 
   // Box kinds: component, node, database, cloud, queue, rectangle, C4 system/container/person, ...
   const c4 = node.kind === 'system' || node.kind === 'container' || node.kind === 'person' || node.technology !== undefined || node.description !== undefined;
+  const layer = node.kind === 'rectangle' ? archimateLayer(node.stereotype) : undefined;
   const text = measure(node.label, theme.size.node, c4 || strong);
-  const tech = node.technology ? measure(`[${node.technology}]`, theme.size.edge) : undefined;
+  const caption = c4Caption(node, theme);
+  const tech = caption ? measure(caption, theme.size.edge) : undefined;
   const desc = node.description?.length ? measure(wrap(node.description.join('\n')), theme.size.note) : undefined;
-  const extra = BOX_EXTRA[node.kind] ?? {};
-  const content = [stereo, text, tech, desc].filter((b): b is TextBlock => !!b);
+  const extra = { ...BOX_EXTRA[node.kind] };
+  // ArchiMate: the type is a glyph in the top-right corner, not a «stereotype» line.
+  if (layer) extra.right = (extra.right ?? 0) + 18;
+  const content = [layer ? undefined : stereo, text, tech, desc].filter((b): b is TextBlock => !!b);
   const contentW = Math.max(...content.map((b) => b.width));
-  const contentH = content.reduce((sum, b) => sum + b.height, 0) + (content.length - 1) * 2 * k;
+  const contentH = content.reduce((sum, b) => sum + b.height, 0) + blockGaps(content.length, !!desc, k);
   // Chen weak entity: room for the inner outline.
   const ring = node.double ? 8 * k : 0;
-  const w = Math.ceil(Math.max((c4 ? 150 : 80) * k, contentW + (24 + (extra.left ?? 0) + (extra.right ?? 0)) * k) + ring);
-  const h = Math.ceil(Math.max((c4 ? 64 : 40) * k, contentH + (18 + (extra.top ?? 0) + (extra.bottom ?? 0)) * k) + ring);
-  return { w, h, text, stereo, tech, desc, anchor: { dx: 0, dy: 0, w, h, shape: node.kind === 'cloud' ? 'ellipse' : 'rect' } };
+  const minW = c4 ? 160 : layer ? 120 : 80;
+  const w = Math.ceil(Math.max(minW * k, contentW + (28 + (extra.left ?? 0) + (extra.right ?? 0)) * k) + ring);
+  const h = Math.ceil(Math.max((c4 ? 68 : layer ? 52 : 40) * k, contentH + (c4 ? 24 : 18 + (extra.top ?? 0) + (extra.bottom ?? 0)) * k + (c4 ? (extra.top ?? 0) * k : 0)) + ring);
+  const shape: NodeShape = { w, h, text, stereo: layer ? undefined : stereo, tech, desc, anchor: { dx: 0, dy: 0, w, h, shape: node.kind === 'cloud' ? 'ellipse' : 'rect' } };
+  if (layer) shape.archimate = { layer, type: node.stereotype!.slice(layer.length).trim() || layer };
+  return shape;
+}
+
+/** Space between a box's text blocks: tight under the name, a breath before the description. */
+export function blockGaps(count: number, hasDesc: boolean, k: number): number {
+  return Math.max(0, count - 1) * 2 * k + (hasDesc ? 4 * k : 0);
+}
+
+const C4_WORD: Partial<Record<NodeKind, string>> = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+
+/**
+ * The C4 type line. PlantUML's C4 shows `[technology]`; the modern themes
+ * show the element type with it, as Structurizr does (`Container · NestJS`),
+ * because in a slide the type is what tells a person from a system.
+ */
+export function c4Caption(node: DNode, theme: Theme): string | undefined {
+  if (theme.plantuml) return node.technology ? `[${node.technology}]` : undefined;
+  const isC4 = node.kind === 'system' || node.kind === 'container' || node.kind === 'person' || node.technology !== undefined;
+  if (!isC4) return undefined;
+  const word = (node.external && node.kind !== 'person' ? 'External ' : '') + (C4_WORD[node.kind] ?? 'Container');
+  return node.technology ? `${word} · ${node.technology}` : word;
 }
 
 function classShape(node: DNode, theme: Theme, measure: (t: string, s: number, b?: boolean) => TextBlock, stereo: TextBlock | undefined): NodeShape {
   const k = theme.scale;
+  const json = node.classKind === 'json';
   const text = measure(node.label, theme.size.node, true);
-  const compartments = (node.compartments ?? []).map((lines) => measure(lines.join('\n') || ' ', theme.size.note));
   // Classic shows PlantUML's round "C/I/A/E" spot left of the name.
-  const headless = node.classKind === 'json' && !node.label;
-  const spot = theme.name === 'classic' && node.classKind !== 'json' ? 26 * k : 0;
-  const kindLabel = node.classKind && !['class', 'abstract', 'entity', 'object', 'json'].includes(node.classKind) && theme.name !== 'classic' ? measure(`«${node.classKind}»`, theme.size.note) : undefined;
-  const header = headless ? 0 : text.height + (stereo?.height ?? 0) + (kindLabel?.height ?? 0) + 12 * k;
-  const w = Math.ceil(Math.max((headless ? 60 : 100) * k, text.width + spot + 28 * k, (stereo?.width ?? 0) + 24 * k, (kindLabel?.width ?? 0) + 24 * k, ...compartments.map((c) => c.width + 24 * k)));
-  const body = compartments.reduce((sum, c) => sum + (c.lines.length === 1 && c.lines[0] === ' ' ? 8 * k : c.height + 10 * k), 0);
+  const headless = json && !node.label;
+  const spot = theme.plantuml && !json ? 26 * k : 0;
+  const kindLabel =
+    node.classKind && !['class', 'abstract', 'entity', 'object', 'json'].includes(node.classKind) && !theme.plantuml ? measure(`«${node.classKind}»`, theme.size.note) : undefined;
+  const padY = (theme.plantuml ? 6 : 8) * k;
+  const header = headless ? 0 : text.height + (stereo?.height ?? 0) + (kindLabel?.height ?? 0) + padY * 2;
+
+  // Members: one row per line, columns aligned across the whole box.
+  const size = theme.size.note;
+  const rowH = size * (theme.plantuml ? LINE_HEIGHT : 1.55);
+  const pad = (theme.plantuml ? 5 : 6) * k;
+  const rows = (node.compartments ?? []).map((lines) => lines.filter((l) => l.trim() !== '').map((l) => parseMember(l, json)));
+  // PlantUML writes `name : type` inline; the modern themes give the type its own right-hand column.
+  if (theme.plantuml) for (const r of rows.flat()) if (r.type) [r.name, r.type] = [`${r.name} : ${r.type}`, undefined];
+  const all = rows.flat();
+  const w = (t: string, bold = false) => measure(t, size, bold).width;
+  const keyW = Math.max(0, ...all.filter((r) => r.key).map((r) => badgeWidth(r.key!, size, theme)));
+  const marker = Math.max(all.some((r) => r.vis) ? size * 1.1 : 0, keyW ? keyW + 6 * k : 0, all.some((r) => r.required) && !keyW ? size * 0.8 : 0);
+  const nameW = Math.max(0, ...all.map((r) => w(r.name, r.key?.includes('PK'))));
+  const typeW = Math.max(0, ...all.map((r) => (r.type ? w(r.type) : 0)));
+  const gap = typeW ? (json ? 14 : 20) * k : 0;
+  const members: MemberLayout = { rows, marker, name: nameW, gap, type: typeW, rowH, pad, size };
+  const contentW = marker + nameW + gap + typeW;
+  const compartments = rows.map((r, i): TextBlock => ({ lines: node.compartments![i]!.length ? node.compartments![i]! : [' '], width: contentW, height: r.length * rowH, size }));
+  const padX = 12 * k;
+  const minW = (headless ? 60 : theme.plantuml ? 100 : 120) * k;
+  const width = Math.ceil(Math.max(minW, text.width + spot + 32 * k, (stereo?.width ?? 0) + 24 * k, (kindLabel?.width ?? 0) + 24 * k, contentW + padX * 2));
+  // The modern themes draw a memberless class as a plain named box; PlantUML keeps its empty compartments.
+  const memberless = !theme.plantuml && rows.every((r) => !r.length);
+  const body = memberless ? 4 * k : rows.reduce((sum, r) => sum + (r.length ? r.length * rowH + pad * 2 : 8 * k), 0);
   const h = Math.ceil(header + body);
   return {
-    w,
+    w: width,
     h,
     text,
     stereo: stereo ?? kindLabel,
     header,
     compartments,
-    anchor: { dx: 0, dy: 0, w, h, shape: 'rect' },
+    members,
+    anchor: { dx: 0, dy: 0, w: width, h, shape: 'rect' },
   };
+}
+
+/** Width of an ER key badge (`PK`, `FK`, `PK FK`): small bold caps on a tint. */
+export function badgeWidth(key: string, size: number, theme: Theme): number {
+  return measureText(key, size * 0.72, true, theme.widthFactor).width + size * 0.7;
 }
 
 export { LINE_HEIGHT };

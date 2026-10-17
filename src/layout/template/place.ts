@@ -1,6 +1,7 @@
 import type { Diagram } from '../../model/types.ts';
 import { nodeBox, type Box, type Positions } from '../../scene/containers.ts';
 import { nodeShape, type NodeShape } from '../../scene/shapes.ts';
+import { measureText } from '../../scene/measure.ts';
 import { cleanRings, hexEdgeX, hexGeometry, layeredBands, RING_ASPECT, ringCenter, templateMetrics, type TemplateMetrics } from '../../scene/template.ts';
 import type { Theme } from '../../scene/theme.ts';
 import type { LayerDef, TemplateSettings } from '../layout-file.ts';
@@ -36,6 +37,10 @@ interface Ctx {
   /** Members per layer, in source order. */
   members: Map<string, string[]>;
   spread: number;
+  /** Lines as the source reads them (`A <|-- B` puts A first), for left-to-right order within a row. */
+  flows: [string, string][];
+  /** Widest label on a line between two elements, by `a|b` (both orders): the gap between them must hold it. */
+  labels: Map<string, number>;
 }
 
 function context(diagram: Diagram, template: TemplateSettings, theme: Theme, options: PlaceOptions): Ctx {
@@ -51,7 +56,24 @@ function context(diagram: Diagram, template: TemplateSettings, theme: Theme, opt
   for (const n of diagram.nodes) if (n.attachedTo && near.has(n.attachedTo.id)) near.get(n.id)!.push(n.attachedTo.id), near.get(n.attachedTo.id)!.push(n.id);
   const members = new Map<string, string[]>(layers.map((l) => [l.id, []]));
   for (const n of [...diagram.nodes].sort((a, b) => a.line - b.line)) members.get(assigned.get(n.id)!)?.push(n.id);
-  return { diagram, layers, assigned, shapes, m: templateMetrics(theme), theme, hints: options.hints ?? {}, near, members, spread: options.spread ?? 1 };
+  const flows: [string, string][] = [];
+  const labels = new Map<string, number>();
+  for (const e of diagram.edges) {
+    if (e.hidden || e.from === e.to || !near.has(e.from) || !near.has(e.to)) continue;
+    flows.push(e.reversed ? [e.to, e.from] : [e.from, e.to]);
+    if (e.label) {
+      const w = measureText(e.label, theme.size.edge, false, theme.widthFactor).width;
+      for (const key of [`${e.from}|${e.to}`, `${e.to}|${e.from}`]) labels.set(key, Math.max(labels.get(key) ?? 0, w));
+    }
+  }
+  return { diagram, layers, assigned, shapes, m: templateMetrics(theme), theme, hints: options.hints ?? {}, near, members, spread: options.spread ?? 1, flows, labels };
+}
+
+/** Centre-to-centre distance of two row neighbours: half of each, plus the gap, wide enough for a label on a line between them. */
+function separation(ctx: Ctx, a: string, b: string): number {
+  const label = ctx.labels.get(`${a}|${b}`);
+  const gap = Math.max(ctx.m.nodeGap * ctx.spread, label ? label + 28 * ctx.theme.scale : 0);
+  return (ctx.shapes.get(a)!.w + ctx.shapes.get(b)!.w) / 2 + gap;
 }
 
 /**
@@ -142,7 +164,7 @@ function placeLayered(ctx: Ctx, options: PlaceOptions): Positions {
     order.forEach((o, k) => rows[k % rows.length]!.push(o.id));
     rows.forEach((row, r) => {
       const want = row.map((id) => order.find((o) => o.id === id)!.wish);
-      const sep = row.map((id, i) => (i ? (ctx.shapes.get(row[i - 1]!)!.w + ctx.shapes.get(id)!.w) / 2 + m.nodeGap * ctx.spread : 0));
+      const sep = row.map((id, i) => (i ? separation(ctx, row[i - 1]!, id) : 0));
       pack(want, sep).forEach((x, i) => (at[row[i]!] = { x, y: rowY[r]! }));
     });
   };
@@ -173,10 +195,19 @@ function placeLayered(ctx: Ctx, options: PlaceOptions): Positions {
   return at;
 }
 
-/** Total horizontal run of the lines touching `ids`: what an in-row swap should shrink. */
+/**
+ * Total horizontal run of the lines touching `ids`, what an in-row swap
+ * should shrink, plus a toll for every line within the row that runs right
+ * to left: a row reads left to right (actor → UI → API), even when the
+ * reversed order is a little shorter.
+ */
 function runOf(ctx: Ctx, at: Positions, ids: string[]): number {
   let sum = 0;
   for (const id of ids) for (const o of ctx.near.get(id)!) if (at[o]) sum += Math.abs(at[id]!.x - at[o]!.x);
+  const row = new Set(ids);
+  for (const [a, b] of ctx.flows) {
+    if (row.has(a) && row.has(b) && at[a]!.y === at[b]!.y && at[a]!.x > at[b]!.x) sum += 3 * ctx.m.nodeGap + Math.max(ctx.shapes.get(a)!.w, ctx.shapes.get(b)!.w);
+  }
   return sum;
 }
 
@@ -193,7 +224,7 @@ function refineRows(ctx: Ctx, at: Positions, ids: string[]) {
     if (order.length < 2) continue;
     const place = (o: string[]) => {
       const centre = mean(o.map((id) => at[id]!.x));
-      const sep = o.map((id, i) => (i ? (ctx.shapes.get(o[i - 1]!)!.w + ctx.shapes.get(id)!.w) / 2 + ctx.m.nodeGap * ctx.spread : 0));
+      const sep = o.map((id, i) => (i ? separation(ctx, o[i - 1]!, id) : 0));
       const xs = pack(o.map(() => 0), sep);
       const shift = centre - mean(xs);
       o.forEach((id, i) => (at[id] = { x: xs[i]! + shift, y }));
@@ -219,7 +250,7 @@ function refineRows(ctx: Ctx, at: Positions, ids: string[]) {
       if (!improved) break;
     }
     // Back to the barycentric spacing where it doesn't disturb the new order.
-    const sep = order.map((id, i) => (i ? (ctx.shapes.get(order[i - 1]!)!.w + ctx.shapes.get(id)!.w) / 2 + ctx.m.nodeGap * ctx.spread : 0));
+    const sep = order.map((id, i) => (i ? separation(ctx, order[i - 1]!, id) : 0));
     const sorted = [...wished].sort((a, b) => a - b);
     pack(sorted, sep).forEach((x, i) => (at[order[i]!] = { x, y }));
   }

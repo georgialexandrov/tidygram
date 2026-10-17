@@ -339,7 +339,7 @@ function parseFlowchart(header: Line, lines: Line[]): ParseResult {
     }
   }
   if (stack.length) warnings.push({ line: lines.at(-1)?.no ?? header.no, text: '', message: `subgraph ${stack.at(-1)} without end` });
-  return { diagram: { family: 'activity', direction, nodes: [...nodes.values()], containers: [...containers.values()], edges }, warnings };
+  return { diagram: { family: 'activity', direction, ...(headerText!.split(/\s+/)[1] ? { directionFixed: true } : {}), nodes: [...nodes.values()], containers: [...containers.values()], edges }, warnings };
 }
 
 // ---- mindmap -----------------------------------------------------------------------------------

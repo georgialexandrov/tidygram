@@ -5,7 +5,11 @@ import { ancestry, containerBoxes, nodeBox, overlaps, sourceCentre, type Box, ty
 import { containerPad, nodeShape, type NodeShape, type Pad } from '../scene/shapes.ts';
 import { measureText } from '../scene/measure.ts';
 import { themeFor, themeOf, type Theme } from '../scene/theme.ts';
-import type { LayoutFile } from './layout-file.ts';
+import { emptyLayout, type LayoutFile } from './layout-file.ts';
+import { loadedAvoid } from '../scene/avoid.ts';
+import { pathLength } from '../scene/geometry.ts';
+import { countCrossings, measureQuality } from '../scene/quality.ts';
+import { buildScene } from '../scene/scene.ts';
 import { refreshTemplate, relayoutTemplate } from './template/index.ts';
 
 const GAP = 24;
@@ -87,7 +91,8 @@ export async function elkPositions(
       ...wrapping,
       'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
       'elk.edgeLabels.placement': 'CENTER',
-      ...(variant.aspectRatio ? { 'elk.aspectRatio': String(variant.aspectRatio) } : {}),
+      // Also how unconnected parts are packed: side by side up to this ratio, not stacked.
+      'elk.aspectRatio': String(variant.aspectRatio ?? 1.6),
     },
     children: [],
     edges: [],
@@ -152,6 +157,104 @@ export async function elkPositions(
   };
   walk(result, 0, 0);
   return positions;
+}
+
+/** The proportions auto layout aims for: a 16:9 window. */
+const TARGET = { max: 16 / 9 };
+
+/**
+ * Default auto layout. ELK's layered layout in the source's direction tends
+ * to one long column (state machines, component stacks) or one long row,
+ * which a 16:9 window shows at a fraction of its size. So a few variants are
+ * laid out (both directions unless the source fixes one; ELK's graph
+ * wrapping; containers in the cross direction) and the one that fits a
+ * 4:3–16:9 frame at the largest size wins, with crossings and a change of
+ * direction, and long lines counted against it. `left to right direction` (and any explicit
+ * Mermaid direction) keeps its direction; only wrapping may reshape it.
+ */
+export async function autoPositions(diagram: Diagram, shapes: Map<string, NodeShape>, theme: Theme, view?: LayoutFile['view']): Promise<Positions> {
+  const own: ElkVariant = { direction: diagram.direction === 'LR' ? 'RIGHT' : 'DOWN', hierarchy: 'include' };
+  // Swimlanes are columns by definition; nwdiag reads top-down, network bars across with hosts hanging off them.
+  if (diagram.containers.some((c) => c.kind === 'swimlane') || diagram.nodes.some((n) => n.kind === 'network') || diagram.nodes.length < 2) return elkPositions(diagram, shapes, theme, own);
+  const fixed = diagram.direction === 'LR' || diagram.directionFixed === true;
+  const parentOf = (id: string) => diagram.nodes.find((n) => n.id === id)?.parent ?? diagram.containers.find((c) => c.id === id)?.parent ?? id;
+  const directions: ElkVariant['direction'][] = fixed ? [own.direction] : [own.direction, own.direction === 'DOWN' ? 'RIGHT' : 'DOWN'];
+  const variants: { variant: ElkVariant; cost: number }[] = [];
+  for (const direction of directions) {
+    const turn = direction === own.direction ? 1 : 0.9;
+    variants.push({ variant: { direction, hierarchy: 'include' }, cost: turn });
+    variants.push({ variant: { direction, hierarchy: 'include', wrapping: true, aspectRatio: 1.6 }, cost: turn * 0.7 });
+    // Containers in the cross direction reshape a lot, but read against a direction the source asked for.
+    if (diagram.containers.length && !fixed) {
+      // Laid out container by container, ELK ignores lines that leave a container: the more of those, the worse it places their ends.
+      const across = diagram.edges.filter((e) => parentOf(e.from) !== parentOf(e.to)).length / Math.max(1, diagram.edges.length);
+      variants.push({ variant: { direction, hierarchy: 'separate', innerDirection: direction === 'DOWN' ? 'RIGHT' : 'DOWN' }, cost: (turn * 0.9) / (1 + across) });
+    }
+  }
+  const results = await Promise.all(variants.map(async ({ variant, cost }) => ({ variant, cost, positions: await elkPositions(diagram, shapes, theme, variant).catch(() => undefined) })));
+  const debug = typeof process !== 'undefined' && process.env?.AUTO_DEBUG;
+  const scored = results
+    .filter((r): r is typeof r & { positions: Positions } => !!r.positions && diagram.nodes.every((n) => r.positions![n.id]))
+    .map((r) => ({ ...r, score: proportionScore(diagram, r.positions, shapes, theme) * r.cost }))
+    .sort((a, b) => b.score - a.score);
+  // Straight lines between centres flatter layouts whose real lines snake (wrapped rows, lines out of
+  // containers laid out on their own): route the front runners and judge them on the real thing.
+  const avoid = loadedAvoid();
+  if (avoid && scored.length > 1) {
+    let best = scored[0]!;
+    let bestScore = -Infinity;
+    for (const c of scored.slice(0, 4)) {
+      const trial: LayoutFile = { ...emptyLayout(), view, nodes: Object.fromEntries(Object.entries(c.positions).map(([id, p]) => [id, { x: p.x, y: p.y }])) };
+      const scene = buildScene(diagram, trial, avoid);
+      const q = measureQuality(scene, diagram);
+      const lines = Math.max(1, scene.edges.length);
+      const frame = Math.max(scene.bounds.w / TARGET.max, scene.bounds.h);
+      const aspect = scene.bounds.w / Math.max(1, scene.bounds.h);
+      const off = Math.abs(Math.log(aspect / Math.min(2, Math.max(4 / 3, aspect))));
+      const crossings = countCrossings(scene.edges.map((e) => e.points));
+      const length = scene.edges.reduce((sum, e) => sum + pathLength(e.points), 0) / lines / frame;
+      const faults = q.nodeCrossings + q.containerCrossings + q.titleCrossings + q.labelOverlaps;
+      const score = (c.cost * 1000) / frame / (1 + (4 * crossings) / lines) / (1 + (0.15 * q.bends) / lines) / (1 + length) / (1 + off) / (1 + (0.5 * faults) / lines);
+      if (debug) console.log(JSON.stringify(c.variant), `proxy ${c.score.toFixed(3)} routed ${score.toFixed(3)} frame ${Math.round(frame)} x ${crossings} bends ${q.bends} len ${length.toFixed(2)} aspect ${aspect.toFixed(2)}`);
+      if (score > bestScore) [best, bestScore] = [c, score];
+    }
+    return best.positions;
+  }
+  if (debug) for (const c of scored) console.log(JSON.stringify(c.variant), c.score.toFixed(3));
+  return scored[0]?.positions ?? elkPositions(diagram, shapes, theme, own);
+}
+
+/**
+ * How large the layout can be drawn in a frame of the target proportions
+ * (relative: 1 / the frame size it needs), discounted for crossings of
+ * straight centre-to-centre lines (a cheap stand-in for routed ones).
+ */
+function proportionScore(diagram: Diagram, positions: Positions, shapes: Map<string, NodeShape>, theme: Theme): number {
+  const boxes = diagram.nodes.map((n) => nodeBox(positions[n.id]!, shapes.get(n.id)!));
+  boxes.push(...containerBoxes(diagram, positions, shapes, containerPad(theme)).values());
+  const w = Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x));
+  const h = Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y));
+  // The height of the 16:9 window that holds the layout: the smaller, the larger it is drawn.
+  const frame = Math.max(w / TARGET.max, h);
+  const segments: [{ x: number; y: number }, { x: number; y: number }, string, string][] = diagram.edges
+    .filter((e) => e.from !== e.to && positions[e.from] && positions[e.to])
+    .map((e) => [positions[e.from]!, positions[e.to]!, e.from, e.to]);
+  let crossings = 0;
+  const orient = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+  for (let i = 0; i < segments.length; i++) {
+    const [a, b, ea, eb] = segments[i]!;
+    for (let j = i + 1; j < segments.length; j++) {
+      const [c, d, ec, ed] = segments[j]!;
+      if (ea === ec || ea === ed || eb === ec || eb === ed) continue;
+      if (orient(a, b, c) * orient(a, b, d) < 0 && orient(c, d, a) * orient(c, d, b) < 0) crossings++;
+    }
+  }
+  // Long lines (relative to the frame) are what a layout that ignores lines across containers produces.
+  const length = segments.reduce((sum, [a, b]) => sum + Math.abs(a.x - b.x) + Math.abs(a.y - b.y), 0) / Math.max(1, segments.length) / frame;
+  // Outside 4:3–2:1 the window shows a strip: count the distance from that band too.
+  const aspect = w / Math.max(1, h);
+  const off = Math.abs(Math.log(aspect / Math.min(2, Math.max(4 / 3, aspect))));
+  return 1000 / frame / (1 + (1.5 * crossings) / Math.max(1, segments.length)) / (1 + length) / (1 + 0.5 * off);
 }
 
 /**
@@ -298,7 +401,7 @@ export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: L
     return next;
   }
 
-  const auto = await elkPositions(diagram, shapes, theme);
+  const auto = await autoPositions(diagram, shapes, theme, layout.view);
   const pinned = mode === 'auto' ? known.filter((n) => layout.nodes[n.id]!.pinned) : [];
 
   // Entries for ids no longer in the source survive (a rename can be undone) unless resetting.

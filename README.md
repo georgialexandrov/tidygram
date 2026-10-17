@@ -24,7 +24,7 @@ elements are placed next to what they connect to.
 | Timing | ✅ robust, concise, clock, binary; `@t` blocks; messages | `timing.puml` |
 | JSON / YAML | ✅ objects and arrays as tables, nested values linked by key; ids are paths (`$.order.lines[0]`); block YAML incl. `- key:` items, flow `[..]`/`{..}`, `\|`/`>` | `json.puml`, `yaml.puml` |
 | Chen ER | ✅ entities, relationships (diamonds), attributes (ellipses, owner-scoped ids), composite attributes, `<<key>>`/`<<multi>>`/`<<derived>>`/`<<weak>>`/`<<identifying>>`, `-N-`, `-(1,N)-`, `=N=` (double line), `=>= d { A, B }` | `chen.puml` |
-| ArchiMate | ✅ `archimate #Layer "X" as A <<type>>`, `Business_Actor(..)`-style macros, Grouping, junctions, every `Rel_*` with its own ends (direction suffixes ignored); no layer colours | `archimate.puml` |
+| ArchiMate | ✅ `archimate #Layer "X" as A <<type>>`, `Business_Actor(..)`-style macros, Grouping, junctions, every `Rel_*` with its own ends (direction suffixes ignored); layer tints and ArchiMate type glyphs | `archimate.puml` |
 | nwdiag | ✅ networks as bars, hosts with per-network addresses, shapes, descriptions, groups, peer links; networks stack in source order | `nwdiag.puml` |
 | Salt, regex, EBNF, math, ditaa, ... | recognised; the editor shows a "not supported yet" panel (`fixtures/unsupported/`) and writes no sidecar | |
 
@@ -306,11 +306,8 @@ Delete still work); nothing wraps.
   moves the diagram. Errors float the same way (red square), dismissable.
 
 - **Display** popover:
-  - **Theme**: `classic` (PlantUML look), `modern` (indigo), `midnight`
-    (dark), `blueprint` (navy, mono type), `editorial` (warm paper, serif),
-    `mono` (print), `mint`, `primary`. All but classic share one structure:
-    one accent colour, hairlines, pill use cases, avatar actors, caps
-    titles. Stored in layout.json, so `pnpm render` produces the same picture.
+  - **Theme**: stored in layout.json (`view.theme`), so `pnpm render`
+    produces the same picture; see [Themes](#themes).
   - **Size**: text, icons and shapes from 75% to 300%, or "Largest that
     fits": the biggest size at which nothing collides and the router keeps
     its line corridors (positions are centres and stay put).
@@ -347,6 +344,76 @@ Delete still work); nothing wraps.
   (yellow triangle), pointing at a row lists what that target can't hold
   under the menu, and the row's tooltip has the full list. A multi-page
   draw.io file converts the page on screen.
+
+## Themes
+
+`modern` is the default (a sidecar without `view.theme` gets it). Every
+theme draws every diagram type; `tests/theme.test.ts` checks each theme's
+text/background pairs against WCAG AA (4.5:1, no large-text discount, since
+diagram text is 10–13 px) and renders every element kind and line end in it.
+
+| Theme | Look |
+|---|---|
+| `modern` | Default. Slate neutrals, indigo as the one accent, system sans (Inter/SF). White cards with a hairline; containers as tinted panels with small-caps titles; lines a mid grey so boxes read first; labels on knock-out chips |
+| `classic` | PlantUML, crisper: Helvetica, `#F1F1F1` boxes, class spots, visibility icons in PlantUML's colours, PlantUML's C4 blues (white text) and ArchiMate layer colours |
+| `midnight` | Dark: deep blue-black, cyan accent; fills step up in lightness, strokes stay low |
+| `editorial` | Warm paper, serif type, burnt-orange accent: figures for essays and print |
+| `blueprint` | Navy paper, white linework, mono type, amber accent |
+| `mono` | Black on white, no colour: print and photocopies |
+| `primary` | Matches the editor chrome: black ink on warm white, primaries as signals |
+
+`mint` was retired (it was `modern` in green); old sidecars that name it
+open in `modern` (`THEME_ALIASES` in `src/scene/theme.ts`), and so do
+unknown names.
+
+What the themes share (everything but `classic`):
+
+- **Hierarchy**: elements first (white or tinted cards, 500–600 weight),
+  containers recede (tint, hairline, caps titles drawn over the lines on a
+  chip of the container's fill, so a crossing line passes under the title),
+  notes and labels quieter still.
+- **Lines** by relation: associations mid grey, structural relations
+  (generalization, realization, composition, aggregation) darker,
+  dependencies dashed, note links lightest; violations in the warning colour.
+  Heads scale with the line weight: a slim notched arrow, hollow triangles
+  and diamonds with mitred joins, crow's feet. Multiplicities have a halo.
+- **Colour that means something**: C4 people solid accent, internal
+  systems/containers accent tint, external grey, with a Structurizr-style
+  type line (`Container · NestJS`); ArchiMate elements get their layer's
+  tint (business yellow, application blue, technology green, ...) and the
+  ArchiMate type glyph in the corner instead of a `«stereotype»` line.
+- **Type**: tabular numerals wherever numbers line up (Gantt dates, ticks,
+  sequence numbers, multiplicities, JSON values); `[technology]` lines in
+  C4 relation labels drawn muted.
+
+Per type:
+
+- **Class / ER / JSON**: a tinted header band; members in aligned columns:
+  visibility glyph (PlantUML's circle/square/diamond/triangle, filled for
+  methods), name, and the type right-aligned and muted; `{static}`
+  underlined, `{abstract}` italic. ER keys as `PK`/`FK` badges (PK on the
+  accent tint, name bold), `*` mandatory as a dot. JSON tables read
+  key | value with scalars in the accent and zebra rows past three. A class
+  without members is a plain named box.
+- **Sequence**: autonumbers in accent bubbles (grey for returns), calls in a
+  stronger ink than returns, hairline lifelines (dotted through `...`
+  delays instead of a white band), tinted activation bars, fragments as thin
+  frames with a small-caps tab, drawn over activation bars so guards stay
+  readable.
+- **Gantt**: weekends shaded through header and body, week/month rules only,
+  sections as small-caps headings with task names indented under them, bars
+  in the accent (completed share solid, the rest a tint, `60%` next to it;
+  a task without a completion is drawn solid, since its progress is unknown,
+  not zero), `is colored in` colours honoured, milestones as diamonds with an
+  italic name, rounded dependency elbows. No "today" line: the model has no
+  today, and exports must not depend on the day they're made.
+- **Timing**: accent waveforms, dotted state guides for robust signals, high
+  time of clocks/binary signals filled faintly, tick labels tabular.
+- **State / activity**: rounded states, bullseye finals, merge diamonds and
+  `if` hexagons in the line colour on a tint so they don't vanish.
+- **Mindmap**: smooth branches thinning with depth; root a solid accent pill,
+  first level tinted, deeper levels quiet pills (WBS keeps its tree lines).
+- **nwdiag**: networks as solid accent bars with the address range on them.
 
 ## layout.json
 

@@ -219,7 +219,8 @@ describe('draw.io layout', () => {
   it("places everything where the file draws it, at the file's size", async () => {
     const { diagram } = parse('flowchart');
     expect(hasSourceLayout(diagram)).toBe(true);
-    const layout = await ensureLayout(diagram, emptyLayout());
+    // Classic's Helvetica fits every label in its file box; a wider theme font may grow a box to fit its text.
+    const layout = await ensureLayout(diagram, { ...emptyLayout(), view: { theme: 'classic' } });
     const scene = buildScene(diagram, layout, avoid);
     for (const n of scene.nodes) {
       const b = n.node.sourceBox!;

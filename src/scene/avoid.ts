@@ -19,3 +19,8 @@ export async function loadAvoid(wasmPathOrUrl: string): Promise<Avoid> {
 }
 
 export const CONN_DIR_ALL = 15;
+
+/** The router, if something has loaded it already (auto layout uses it to judge candidates, but never loads it itself). */
+export function loadedAvoid(): Avoid | undefined {
+  return instance;
+}

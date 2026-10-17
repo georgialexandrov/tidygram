@@ -2,6 +2,9 @@ import type { Diagram } from '../model/types.ts';
 import { buildAnyScene } from '../scene/any.ts';
 import type { Avoid } from '../scene/avoid.ts';
 import { buildScene } from '../scene/scene.ts';
+import { countCrossings } from '../scene/quality.ts';
+
+export { countCrossings };
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
 import type { NodeShape } from '../scene/shapes.ts';
 import { scaledTheme, themeFor, themeOf, type Theme } from '../scene/theme.ts';
@@ -116,32 +119,6 @@ const debug = (...args: unknown[]) => {
   if (typeof process !== 'undefined' && process.env?.FIT_DEBUG) console.log(...args);
 };
 
-/** Number of proper crossings between the orthogonal segments of different lines. */
-export function countCrossings(lines: Point[][]): number {
-  type Seg = { a: Point; b: Point; line: number };
-  const horizontal: Seg[] = [];
-  const vertical: Seg[] = [];
-  lines.forEach((pts, line) => {
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1]!;
-      const b = pts[i]!;
-      if (Math.abs(a[1] - b[1]) < 0.5) horizontal.push({ a, b, line });
-      else if (Math.abs(a[0] - b[0]) < 0.5) vertical.push({ a, b, line });
-    }
-  });
-  let crossings = 0;
-  for (const h of horizontal) {
-    const [x0, x1] = [Math.min(h.a[0], h.b[0]), Math.max(h.a[0], h.b[0])];
-    const y = h.a[1];
-    for (const v of vertical) {
-      if (v.line === h.line) continue;
-      const x = v.a[0];
-      const [y0, y1] = [Math.min(v.a[1], v.b[1]), Math.max(v.a[1], v.b[1])];
-      if (x > x0 + 0.5 && x < x1 - 0.5 && y > y0 + 0.5 && y < y1 - 0.5) crossings++;
-    }
-  }
-  return crossings;
-}
 
 /**
  * Ordered diagrams (sequence, Gantt, timing) have no free positions, only gaps: search size × column gap × row gap and keep
@@ -293,7 +270,11 @@ export async function fitToFrame(diagram: Diagram, layout: LayoutFile, frame: Po
       const lines = buildScene(diagram, trial, avoid).edges.map((e) => e.points);
       const length = lines.reduce((sum, pts) => sum + pts.slice(1).reduce((l, p, i) => l + Math.abs(p[0] - pts[i]![0]) + Math.abs(p[1] - pts[i]![1]), 0), 0);
       const crossings = countCrossings(lines);
-      const score = Math.log(c.density) - length / Math.max(1, lines.length) / c.side - 1.5 * (crossings / Math.max(1, lines.length));
+      // How far from the frame's shape the candidate stays after the stretch below: a lopsided winner leaves the frame half empty.
+      const cb = bounds(diagram, c.positions, c.candidate.shapes, c.candidate.theme);
+      const r = cb.w / cb.h;
+      const stretched = r < ratio ? Math.min(ratio, r * MAX_STRETCH) : Math.max(ratio, r / MAX_STRETCH);
+      const score = Math.log(c.density) - length / Math.max(1, lines.length) / c.side - 1.5 * (crossings / Math.max(1, lines.length)) - 2 * Math.abs(Math.log(stretched / ratio));
       debug('routed', c.name.padEnd(64), `${Math.round(performance.now() - t0)}ms crossings ${crossings} → ${score.toFixed(3)}`);
       if (score > bestScore) {
         bestScore = score;

@@ -244,6 +244,7 @@ export function parsePuml(source: string): ParseResult {
   const noteCounts = new Map<string, number>();
   const implicit = new Set<string>();
   let direction: Diagram['direction'] = 'TB';
+  let directionFixed = false;
 
   // Pre-pass: block comments, line continuation, start tag.
   const rawLines = source.split(/\r?\n/);
@@ -520,6 +521,7 @@ export function parsePuml(source: string): ParseResult {
     }
     if (/^top\s+to\s+bottom\s+direction$/i.test(text)) {
       direction = 'TB';
+      directionFixed = true;
       continue;
     }
     // Concurrent-region separators inside composite states.
@@ -695,7 +697,7 @@ export function parsePuml(source: string): ParseResult {
   }
 
   return {
-    diagram: { family, direction, nodes: [...nodes.values()], containers: [...containers.values()], edges },
+    diagram: { family, direction, ...(directionFixed ? { directionFixed } : {}), nodes: [...nodes.values()], containers: [...containers.values()], edges },
     warnings,
   };
 

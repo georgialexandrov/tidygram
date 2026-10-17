@@ -11,7 +11,7 @@ import type { TemplateScene } from './scene/template.ts';
 import { parseDiagram } from './model/diagram.ts';
 import { DiagramSvg } from './render/DiagramSvg.tsx';
 import { loadAvoid } from './scene/avoid.ts';
-import { THEMES } from './scene/theme.ts';
+import { THEME_ALIASES, THEMES } from './scene/theme.ts';
 import { fitToFrame } from './layout/fit.ts';
 import { largestScale } from './layout/scale.ts';
 import { buildAnyScene } from './scene/any.ts';
@@ -81,7 +81,7 @@ const avoid = await loadAvoid(join(dirname(require.resolve('libavoid-js')), 'lib
 const sidecar = before ? parseLayout(before) : emptyLayout();
 let layout = pageLayout(sidecar, pageKey);
 if (values.theme) {
-  if (!(values.theme in THEMES)) throw new Error(`Unknown theme ${values.theme}; use ${Object.keys(THEMES).join(' or ')}`);
+  if (!(values.theme in THEMES) && !(values.theme in THEME_ALIASES)) throw new Error(`Unknown theme ${values.theme}; use ${Object.keys(THEMES).join(' or ')}`);
   layout = { ...layout, view: { ...layout.view, theme: values.theme } };
 }
 layout = await ensureLayout(diagram, layout, mode);
