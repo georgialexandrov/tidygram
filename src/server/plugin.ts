@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, renameSync, writeFileSync, existsSync, statS
 import { join, relative, resolve, sep } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import type { Plugin } from 'vite';
-import { layoutPathFor } from '../paths.ts';
+import { DIAGRAM_FILE, layoutPathFor } from '../paths.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist']);
 
@@ -13,7 +13,7 @@ function listPuml(root: string, dir = root, depth = 0): string[] {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) found.push(...listPuml(root, full, depth + 1));
-    else if (/\.(puml|plantuml|pu)$/i.test(entry.name)) found.push(relative(root, full));
+    else if (DIAGRAM_FILE.test(entry.name)) found.push(relative(root, full));
   }
   return found.sort();
 }
@@ -28,7 +28,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 /**
- * File access for the editor: lists .puml files under `root`, reads a diagram
+ * File access for the editor: lists .puml and .mmd files under `root`, reads a diagram
  * with its layout, writes the layout back, and pushes a `puml:changed` event
  * when either file changes on disk (an agent editing the text, say).
  */
@@ -37,7 +37,7 @@ export function pumlFiles(root: string): Plugin {
   const lastWritten = new Map<string, string>();
 
   const resolveFile = (file: string | null): string | undefined => {
-    if (!file || !/\.(puml|plantuml|pu)$/i.test(file)) return undefined;
+    if (!file || !DIAGRAM_FILE.test(file)) return undefined;
     const full = resolve(base, file);
     return full.startsWith(base + sep) && existsSync(full) && statSync(full).isFile() ? full : undefined;
   };
@@ -50,7 +50,7 @@ export function pumlFiles(root: string): Plugin {
         const full = resolve(path);
         if (!full.startsWith(base + sep)) return;
         const isLayout = full.endsWith('.layout.json');
-        if (!isLayout && !/\.(puml|plantuml|pu)$/i.test(full)) return;
+        if (!isLayout && !DIAGRAM_FILE.test(full)) return;
         // Ignore the echo of our own layout writes.
         if (isLayout && existsSync(full) && readFileSync(full, 'utf8') === lastWritten.get(full)) return;
         const puml = isLayout ? listPuml(base).find((f) => layoutPathFor(resolve(base, f)) === full) : relative(base, full);
@@ -70,7 +70,7 @@ export function pumlFiles(root: string): Plugin {
           if (url.pathname === '/files' && req.method === 'GET') return send(200, { root: base, files: listPuml(base) });
 
           const full = resolveFile(url.searchParams.get('file'));
-          if (!full) return send(404, { error: 'unknown .puml file' });
+          if (!full) return send(404, { error: 'unknown diagram file' });
           const layoutPath = layoutPathFor(full);
 
           if (url.pathname === '/doc' && req.method === 'GET') {

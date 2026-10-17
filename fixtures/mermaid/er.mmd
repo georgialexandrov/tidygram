@@ -1,0 +1,45 @@
+erDiagram
+  %% Blog schema
+  USER ||--o{ POST : writes
+  USER ||--o{ COMMENT : "leaves"
+  POST ||--o{ COMMENT : has
+  POST ||--|{ POST-TAG : tagged
+  TAG ||--o{ POST-TAG : ""
+  USER |o..o| PROFILE : "may have"
+  POST }o..o{ MEDIA : embeds
+  USER one or more optionally to zero or more TEAM : joins
+  USER {
+    bigint id PK
+    text email UK "login"
+    text name
+  }
+  POST {
+    bigint id PK
+    bigint author_id FK
+    text title
+    text body
+    timestamp published_at
+  }
+  COMMENT {
+    bigint id PK
+    bigint post_id FK
+    bigint user_id FK
+    text body
+  }
+  TAG {
+    bigint id PK
+    text name UK
+  }
+  POST-TAG["Post tag"] {
+    bigint post_id PK, FK
+    bigint tag_id PK, FK
+  }
+  PROFILE {
+    bigint user_id PK, FK
+    varchar(280) bio
+  }
+  MEDIA {
+    uuid id PK
+    string[] urls
+  }
+  TEAM

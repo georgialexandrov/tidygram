@@ -1,0 +1,54 @@
+classDiagram
+  direction TB
+  namespace Ordering {
+    class Order {
+      -UUID id
+      -Instant placedAt
+      +total() Money
+      +cancel()
+    }
+    class OrderLine {
+      -int quantity
+      +subtotal() Money
+    }
+  }
+  class OrderStatus {
+    <<enumeration>>
+    PENDING
+    PAID
+    SHIPPED
+    CANCELLED
+  }
+  class Customer {
+    +String name
+    +Email email
+  }
+  class PaymentGateway {
+    <<interface>>
+    +charge(Money amount) Receipt
+  }
+  class StripeGateway
+  class Repository~T~ {
+    +find(UUID id) T
+    +save(T item)
+  }
+  class Money["Money (value)"]
+  <<abstract>> Product
+  Product : +String sku
+  Product : +price() Money
+  class Book
+  class Ebook
+
+  Customer "1" --> "*" Order : places
+  Order "1" *-- "1..*" OrderLine : contains
+  OrderLine --> Product
+  Order --> OrderStatus
+  Order ..> PaymentGateway : uses
+  StripeGateway ..|> PaymentGateway
+  Product <|-- Book
+  Product <|-- Ebook
+  Customer o-- Money
+  Repository~T~ <.. Order
+  Order -- Customer
+  OrderLine .. Money
+  note for StripeGateway "Retries with the same idempotency key"

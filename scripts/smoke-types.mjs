@@ -4,7 +4,11 @@ import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'no
 import { withChrome, sleep } from './cdp.mjs';
 
 const dir = new URL('../fixtures/', import.meta.url);
-const files = readdirSync(dir).filter((f) => /\.(puml|mmd)$/.test(f)).sort();
+// Mermaid fixtures live in their own folder: `class.mmd` next to `class.puml` would share `class.layout.json`.
+const files = [
+  ...readdirSync(dir).filter((f) => /\.(puml|mmd)$/.test(f)).sort(),
+  ...readdirSync(new URL('mermaid/', dir)).filter((f) => /\.mmd$/.test(f)).sort().map((f) => `mermaid/${f}`),
+];
 const layoutOf = (f) => new URL(f.replace(/\.\w+$/, '.layout.json'), dir);
 const saved = new Map(files.map((f) => [f, existsSync(layoutOf(f)) ? readFileSync(layoutOf(f), 'utf8') : null]));
 

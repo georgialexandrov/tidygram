@@ -1,0 +1,22 @@
+gantt
+  title Launch plan
+  dateFormat YYYY-MM-DD
+  axisFormat %d %b
+  excludes weekends
+  todayMarker off
+
+  section Discovery
+  Interviews           :done, interviews, 2026-11-02, 5d
+  Requirements         :done, req, after interviews, 4d
+  Requirements signed off :milestone, signoff, after req, 0d
+
+  section Build
+  API                  :active, api, after req, 10d
+  Web app              :web, after req, 12d
+  Payments integration :crit, pay, after api, 6d
+
+  section Launch
+  Load test            :load, after pay web, 3d
+  Beta                 :beta, after load, 1w
+  Launch               :milestone, launch, after beta, 0d
+  Retro                :2027-01-11, 2027-01-13

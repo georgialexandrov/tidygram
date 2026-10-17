@@ -6,18 +6,18 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, type LayoutMode } from './layout/auto.ts';
 import { emptyLayout, parseLayout, serializeLayout } from './layout/layout-file.ts';
-import { parsePuml } from './model/parse.ts';
+import { parseDiagram } from './model/diagram.ts';
 import { DiagramSvg } from './render/DiagramSvg.tsx';
 import { loadAvoid } from './scene/avoid.ts';
 import { THEMES } from './scene/theme.ts';
 import { fitToFrame } from './layout/fit.ts';
 import { largestScale } from './layout/scale.ts';
 import { buildAnyScene } from './scene/any.ts';
-import { layoutPathFor } from './paths.ts';
+import { DIAGRAM_FILE, layoutPathFor } from './paths.ts';
 
-const USAGE = `Usage: pnpm render <diagram.puml> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
+const USAGE = `Usage: pnpm render <diagram.puml|diagram.mmd> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
 
-Reads diagram.layout.json next to the .puml (if any), places nodes that have no
+Reads diagram.layout.json next to the .puml or .mmd (if any), places nodes that have no
 position yet, routes the lines and writes an SVG. The completed layout is written
 back unless --no-write is given.
 
@@ -47,7 +47,7 @@ if (values.help || !file) {
   process.exit(file ? 0 : 1);
 }
 
-const { diagram, warnings } = parsePuml(readFileSync(file, 'utf8'));
+const { diagram, warnings } = parseDiagram(readFileSync(file, 'utf8'), file);
 for (const w of warnings) console.warn(`${file}:${w.line}: ${w.message}: ${w.text.trim()}`);
 
 const layoutPath = layoutPathFor(file);
@@ -82,7 +82,7 @@ if (values.scale) {
 
 const scene = buildAnyScene(diagram, layout, avoid);
 
-const out = values.out ?? file.replace(/\.puml$/, '') + '.svg';
+const out = values.out ?? file.replace(DIAGRAM_FILE, '') + '.svg';
 writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));
 console.log(`wrote ${out}`);
 

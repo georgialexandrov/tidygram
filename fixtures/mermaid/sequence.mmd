@@ -1,0 +1,49 @@
+sequenceDiagram
+  title Card payment with 3-D Secure
+  autonumber
+  actor C as Customer
+  participant Web as Web app
+  box Aqua Payments
+    participant Pay as Payment service
+    participant Ledger@{ "type" : "database" }
+  end
+  participant Stripe
+
+  C->>+Web: Place order
+  Web->>+Pay: Authorise 49.90 EUR
+  Note right of Pay: Idempotency key = order id
+  Pay->>+Stripe: Create PaymentIntent
+  Stripe-->>-Pay: requires_action
+  alt 3-D Secure needed
+    Pay-->>Web: Challenge URL
+    Web->>C: Show challenge
+    C->>Stripe: Approve in banking app
+    Stripe-)Pay: webhook: succeeded
+  else Frictionless
+    Stripe-)Pay: webhook: succeeded
+  end
+  loop Until the ledger acknowledges
+    Pay->>Ledger: Append entry
+  end
+  par Notify
+    Pay-)Web: payment.succeeded
+  and Record
+    Pay->>Ledger: Mark paid
+  end
+  rect rgb(240, 240, 255)
+    opt Customer opted in
+      Web-)C: Send receipt
+    end
+  end
+  critical Settle
+    Pay->>Stripe: Capture
+  option Capture fails
+    Pay--xStripe: Void
+  end
+  Pay-->>-Web: Authorised
+  create participant Mail as Mailer
+  Web->>Mail: Queue receipt
+  destroy Mail
+  Mail-->>Web: Sent
+  Note over C,Web: Order page refreshes
+  Web-->>-C: Thank you

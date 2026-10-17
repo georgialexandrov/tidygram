@@ -10,10 +10,12 @@ import { unescape, type Line } from './puml-util.ts';
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
-interface Draft {
+export interface Draft {
   task: GanttTask;
   /** Unresolved constraints, applied by `schedule`. */
   startRef?: { task: string; at: 'start' | 'end'; offset: number };
+  /** Starts when the last of these ends (Mermaid `after a b`). */
+  startAfter?: string[];
   endRef?: { task: string; at: 'start' | 'end'; offset: number };
   startDate?: string;
   endDate?: string;
@@ -123,13 +125,13 @@ export function parseGantt(lines: Line[]): { diagram: Diagram; warnings: ParseWa
   return { diagram: { family: 'description', direction: 'LR', nodes: [], containers: [], edges: [], special: model }, warnings };
 }
 
-function dayOffset(start: string | undefined, date: string): number {
+export function dayOffset(start: string | undefined, date: string): number {
   if (!start) return 0;
   return Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000);
 }
 
 /** Resolves constraints to calendar-day offsets. Closed weekdays don't count toward durations. */
-function schedule(drafts: Draft[], start: string | undefined, closed: Set<number>): GanttTask[] {
+export function schedule(drafts: Draft[], start: string | undefined, closed: Set<number>): GanttTask[] {
   const startDay = start ? new Date(`${start}T00:00:00Z`).getUTCDay() : 1;
   const isClosed = (day: number) => closed.size > 0 && closed.has((((startDay + day) % 7) + 7) % 7);
   const nextOpen = (day: number) => {
@@ -159,6 +161,9 @@ function schedule(drafts: Draft[], start: string | undefined, closed: Set<number
       else if (d.startRef) {
         const ref = byId.get(d.startRef.task)?.task;
         if (ref) s = (d.startRef.at === 'end' ? end(ref) : ref.start) + d.startRef.offset;
+      } else if (d.startAfter) {
+        const refs = d.startAfter.map((id) => byId.get(id)?.task).filter((t) => t !== undefined);
+        if (refs.length) s = Math.max(...refs.map(end));
       }
       if (!t.milestone) s = nextOpen(s);
       let duration = t.milestone ? 0 : span(s, d.durationDays ?? 1);

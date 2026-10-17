@@ -1,0 +1,44 @@
+---
+title: Checkout flow
+---
+%%{init: {"flowchart": {"curve": "basis"}}}%%
+flowchart LR
+  %% Customer-facing entry points
+  start([Customer opens cart]) --> cart[Review cart]
+  cart --> signedIn{Signed in?}
+  signedIn -->|no| login(Log in or continue as guest)
+  signedIn -->|yes| address[/Shipping address/]
+  login --> address
+
+  subgraph pay [Payment]
+    direction TB
+    method{{Choose method}} --> card[Card] & wallet[Wallet]
+    card -- 3-D Secure --> psp[[Payment provider]]
+    wallet --> psp
+    psp -.->|webhook| ledger[(Ledger)]
+  end
+
+  address --> method
+  psp ==> ok{Approved?}
+  ok -->|yes| confirm>Order confirmed]
+  ok -->|no| retry((Retry)) --> method
+  confirm --> notify & invoice
+
+  subgraph after [After the order]
+    notify[Email receipt]
+    invoice[\Invoice PDF\]
+    warehouse[(Warehouse)]
+  end
+
+  invoice --- warehouse
+  notify --o archive[Archive]
+  ledger --x fraud[Fraud check]
+  fraud <--> ledger
+  confirm ~~~ archive
+
+  classDef hot fill:#f96,stroke:#333
+  class ok,retry hot
+  style psp stroke-width:2px
+  linkStyle 0 stroke:#999
+  click cart "https://example.com/cart" "Open cart"
+  cart:::hot

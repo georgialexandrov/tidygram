@@ -1,0 +1,54 @@
+stateDiagram-v2
+  direction TB
+  [*] --> Draft
+  Draft --> Submitted : submit
+  Submitted --> Review : needs review
+  Submitted --> Paying : auto-approve
+
+  state Review {
+    [*] --> Waiting
+    Waiting --> Approved : approve
+    Waiting --> Rejected : reject
+    Approved --> [*]
+    Rejected --> [*]
+  }
+  Review --> Paying : approved
+  Review --> Cancelled : rejected
+
+  Paying : charge card
+  Paying : retry 3 times
+  state check <<choice>>
+  Paying --> check
+  check --> Fulfilment : paid
+  check --> Cancelled : failed
+
+  state "Fulfilment" as Fulfilment {
+    state split <<fork>>
+    state merge <<join>>
+    [*] --> split
+    split --> Picking
+    split --> Invoicing
+    Picking --> Packing
+    Packing --> merge
+    Invoicing --> merge
+    merge --> [*]
+  }
+  state Notifications {
+    [*] --> Queued
+    Queued --> Sent
+    --
+    [*] --> Logged
+  }
+  Fulfilment --> Shipped
+  Fulfilment --> Notifications
+  state "Out for delivery" as Shipped
+  Shipped --> Delivered : signed
+  Delivered --> [*]
+  Cancelled --> [*]
+  note right of Paying
+    Card is charged once;
+    retries use the same idempotency key.
+  end note
+  note left of Cancelled : refund if paid
+  classDef bad fill:#f00
+  class Cancelled bad

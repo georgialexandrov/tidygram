@@ -153,7 +153,7 @@ const RIGHT_HEADS: Record<string, ArrowHead> = {
   '0': 'circle',
 };
 /** How a head is written at the end of an arrow (`--|>`) and at its start (`<|--`); used to build edge ids. */
-const HEAD_TOKENS: Record<ArrowHead, [start: string, end: string]> = {
+export const HEAD_TOKENS: Record<ArrowHead, [start: string, end: string]> = {
   none: ['', ''],
   arrow: ['<', '>'],
   triangle: ['<|', '|>'],
