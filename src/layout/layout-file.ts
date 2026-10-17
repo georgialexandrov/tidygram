@@ -13,6 +13,15 @@
  *
  * Use `pageLayout` / `withPageLayout` to read and write one page; the rest of
  * the code only ever sees a single page's `LayoutFile`.
+ *
+ * Architecture templates (`template`, see `TemplateSettings`): the source
+ * can't say which layer an element belongs to and is never written, so the
+ * template and the element → layer assignment live here, per page. While a
+ * template is on, `nodes` hold the template's arrangement and `template.free`
+ * keeps the free layout it replaced. Sidecars without `template` are free
+ * layouts, exactly as before. A later "views" feature (C4 zoom levels as
+ * switchable views) fits the same way `pages` does: a map of named entries,
+ * each with its own `template`, `nodes` and `edges`.
  */
 
 export type Point = [number, number];
@@ -46,9 +55,52 @@ export interface ViewSettings {
   spacing?: Point;
 }
 
+/** The architecture templates: one picture where layers are bands (layered), a hexagon (ports & adapters) or rings (clean / onion). */
+export type TemplateKind = 'layered' | 'hexagonal' | 'clean';
+
+export const TEMPLATE_KINDS: TemplateKind[] = ['layered', 'hexagonal', 'clean'];
+
+/** One band, ring or hexagon role. `id` is what assignments refer to; `label` is drawn. */
+export interface LayerDef {
+  id: string;
+  label: string;
+}
+
+/**
+ * Which dependencies count as violations. Layered: `relaxed` flags lines
+ * that point up (a lower layer using a higher one), `strict` also flags lines
+ * that skip a layer. Hexagonal and clean have one rule set (`off` disables it).
+ */
+export type TemplateRules = 'strict' | 'relaxed' | 'off';
+
+export interface TemplateSettings {
+  kind: TemplateKind;
+  /**
+   * Bands top to bottom (layered), rings inside out (clean). Hexagonal has
+   * fixed roles (driving, inbound, application, domain, outbound, driven);
+   * only their labels can change. Absent: the kind's default (ArchiMate
+   * diagrams get business / application / technology).
+   */
+  layers?: LayerDef[];
+  /** Absent: `relaxed` (`off` for ArchiMate, whose serving lines point up by design). */
+  rules?: TemplateRules;
+  /** Assignments a human made (dragged into a band, ring or zone): element id → layer id. Never re-guessed. */
+  assign: Record<string, string>;
+  /**
+   * Machine guesses (names, stereotypes, containers, kinds, graph position):
+   * element id → layer id. Re-guessed whenever the diagram loads, so a source
+   * edit can move an element whose layer nobody confirmed.
+   */
+  guess: Record<string, string>;
+  /** The free layout from before the template was applied; turning the template off restores it. */
+  free?: { nodes: Record<string, NodeLayout>; edges: Record<string, EdgeLayout> };
+}
+
 export interface LayoutFile {
   version: 1;
   view?: ViewSettings;
+  /** Architecture template on this page, if any. */
+  template?: TemplateSettings;
   nodes: Record<string, NodeLayout>;
   edges: Record<string, EdgeLayout>;
   /** Layouts of the other pages of a multi-page draw.io file, by page id. Absent otherwise. */
@@ -58,6 +110,7 @@ export interface LayoutFile {
 /** One non-first page's layout: a `LayoutFile` without the version or further pages. */
 export interface PageLayout {
   view?: ViewSettings;
+  template?: TemplateSettings;
   nodes: Record<string, NodeLayout>;
   edges: Record<string, EdgeLayout>;
 }
@@ -84,7 +137,7 @@ export function withPageLayout(file: LayoutFile, page: string | undefined, layou
   const { version: _version, pages: _pages, ...entry } = layout;
   if (page === undefined) return file.pages ? { ...entry, version: 1, pages: file.pages } : { ...entry, version: 1 };
   const pages = { ...file.pages };
-  if (entry.view || Object.keys(entry.nodes).length || Object.keys(entry.edges).length) pages[page] = entry;
+  if (entry.view || entry.template || Object.keys(entry.nodes).length || Object.keys(entry.edges).length) pages[page] = entry;
   else delete pages[page];
   const { pages: _old, ...top } = file;
   return Object.keys(pages).length ? { ...top, pages } : top;
@@ -115,7 +168,60 @@ export function parseLayout(text: string): LayoutFile {
   return layout;
 }
 
-function readPage(raw: { nodes?: unknown; edges?: unknown; view?: Record<string, unknown> }): LayoutFile {
+function readNodes(raw: unknown): Record<string, NodeLayout> {
+  const nodes: Record<string, NodeLayout> = {};
+  if (!raw || typeof raw !== 'object') return nodes;
+  for (const [id, value] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
+    const x = num(value?.x);
+    const y = num(value?.y);
+    if (x === undefined || y === undefined) continue;
+    nodes[id] = value.pinned === true ? { x, y, pinned: true } : { x, y };
+  }
+  return nodes;
+}
+
+function readEdges(raw: unknown): Record<string, EdgeLayout> {
+  const edges: Record<string, EdgeLayout> = {};
+  if (!raw || typeof raw !== 'object') return edges;
+  for (const [id, value] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
+    const entry: EdgeLayout = {};
+    if (Array.isArray(value?.via)) {
+      const via = value.via.map(point).filter((p): p is Point => p !== undefined);
+      if (via.length) entry.via = via;
+    }
+    const label = point(value?.label);
+    if (label) entry.label = label;
+    if (entry.via || entry.label) edges[id] = entry;
+  }
+  return edges;
+}
+
+const stringMap = (raw: unknown): Record<string, string> =>
+  raw && typeof raw === 'object' ? Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== '')) : {};
+
+/** Tolerant like the rest: an unknown kind drops the template, malformed layers fall back to the default. */
+function readTemplate(raw: unknown): TemplateSettings | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const t = raw as Record<string, unknown>;
+  if (!TEMPLATE_KINDS.includes(t.kind as TemplateKind)) return undefined;
+  const template: TemplateSettings = { kind: t.kind as TemplateKind, assign: stringMap(t.assign), guess: stringMap(t.guess) };
+  if (Array.isArray(t.layers)) {
+    const layers = t.layers.flatMap((l): LayerDef[] => {
+      if (typeof l === 'string' && l) return [{ id: l, label: l }];
+      const o = l as Record<string, unknown> | null;
+      return o && typeof o.id === 'string' && o.id ? [{ id: o.id, label: typeof o.label === 'string' ? o.label : o.id }] : [];
+    });
+    if (layers.length && new Set(layers.map((l) => l.id)).size === layers.length) template.layers = layers;
+  }
+  if (t.rules === 'strict' || t.rules === 'relaxed' || t.rules === 'off') template.rules = t.rules;
+  if (t.free && typeof t.free === 'object') {
+    const f = t.free as Record<string, unknown>;
+    template.free = { nodes: readNodes(f.nodes), edges: readEdges(f.edges) };
+  }
+  return template;
+}
+
+function readPage(raw: { nodes?: unknown; edges?: unknown; view?: Record<string, unknown>; template?: unknown }): LayoutFile {
   const layout = emptyLayout();
   if (raw.view && typeof raw.view === 'object') {
     const view: ViewSettings = {};
@@ -132,26 +238,10 @@ function readPage(raw: { nodes?: unknown; edges?: unknown; view?: Record<string,
     if (spacing && spacing[0] > 0 && spacing[1] > 0 && (spacing[0] !== 1 || spacing[1] !== 1)) view.spacing = spacing;
     if (view.theme || view.frame || view.scale || view.text || view.icons || view.spacing) layout.view = view;
   }
-  if (raw.nodes && typeof raw.nodes === 'object') {
-    for (const [id, value] of Object.entries(raw.nodes as Record<string, Record<string, unknown>>)) {
-      const x = num(value?.x);
-      const y = num(value?.y);
-      if (x === undefined || y === undefined) continue;
-      layout.nodes[id] = value.pinned === true ? { x, y, pinned: true } : { x, y };
-    }
-  }
-  if (raw.edges && typeof raw.edges === 'object') {
-    for (const [id, value] of Object.entries(raw.edges as Record<string, Record<string, unknown>>)) {
-      const entry: EdgeLayout = {};
-      if (Array.isArray(value?.via)) {
-        const via = value.via.map(point).filter((p): p is Point => p !== undefined);
-        if (via.length) entry.via = via;
-      }
-      const label = point(value?.label);
-      if (label) entry.label = label;
-      if (entry.via || entry.label) layout.edges[id] = entry;
-    }
-  }
+  const template = readTemplate(raw.template);
+  if (template) layout.template = template;
+  layout.nodes = readNodes(raw.nodes);
+  layout.edges = readEdges(raw.edges);
   return layout;
 }
 
@@ -165,22 +255,44 @@ export function serializeLayout(layout: LayoutFile): string {
   return `{\n  "version": 1,\n${pageBody(layout, '  ')}${tail}\n}\n`;
 }
 
-/** `view`, `nodes` and `edges` of one page at the given indent, without the closing newline. */
-function pageBody(layout: PageLayout, pad: string): string {
-  const nodeLines = sortedKeys(layout.nodes).map((id) => {
-    const n = layout.nodes[id]!;
+const block = (lines: string[], pad: string) => (lines.length ? `{\n${lines.join(',\n')}\n${pad}}` : '{}');
+
+function nodeLines(nodes: Record<string, NodeLayout>, pad: string): string[] {
+  return sortedKeys(nodes).map((id) => {
+    const n = nodes[id]!;
     const parts = [`"x": ${r(n.x)}`, `"y": ${r(n.y)}`];
     if (n.pinned) parts.push('"pinned": true');
     return `${pad}  ${JSON.stringify(id)}: { ${parts.join(', ')} }`;
   });
-  const edgeLines = sortedKeys(layout.edges).flatMap((id) => {
-    const e = layout.edges[id]!;
+}
+
+function edgeLines(edges: Record<string, EdgeLayout>, pad: string): string[] {
+  return sortedKeys(edges).flatMap((id) => {
+    const e = edges[id]!;
     const parts: string[] = [];
     if (e.via?.length) parts.push(`"via": [${e.via.map(([x, y]) => `[${r(x)}, ${r(y)}]`).join(', ')}]`);
     if (e.label) parts.push(`"label": [${r(e.label[0])}, ${r(e.label[1])}]`);
     return parts.length ? [`${pad}  ${JSON.stringify(id)}: { ${parts.join(', ')} }`] : [];
   });
-  const block = (lines: string[]) => (lines.length ? `{\n${lines.join(',\n')}\n${pad}}` : '{}');
+}
+
+/** The template block: settings on one line each, one assignment per line, the stashed free layout last. */
+function templateBody(t: TemplateSettings, pad: string): string {
+  const inner = `${pad}  `;
+  const lines = [`${inner}"kind": ${JSON.stringify(t.kind)}`];
+  if (t.layers) lines.push(`${inner}"layers": [${t.layers.map((l) => `{ "id": ${JSON.stringify(l.id)}, "label": ${JSON.stringify(l.label)} }`).join(', ')}]`);
+  if (t.rules) lines.push(`${inner}"rules": ${JSON.stringify(t.rules)}`);
+  const map = (m: Record<string, string>) => block(sortedKeys(m).map((id) => `${inner}  ${JSON.stringify(id)}: ${JSON.stringify(m[id])}`), inner);
+  lines.push(`${inner}"assign": ${map(t.assign)}`, `${inner}"guess": ${map(t.guess)}`);
+  if (t.free) {
+    const p = `${inner}  `;
+    lines.push(`${inner}"free": {\n${p}"nodes": ${block(nodeLines(t.free.nodes, p), p)},\n${p}"edges": ${block(edgeLines(t.free.edges, p), p)}\n${inner}}`);
+  }
+  return `{\n${lines.join(',\n')}\n${pad}}`;
+}
+
+/** `view`, `template`, `nodes` and `edges` of one page at the given indent, without the closing newline. */
+function pageBody(layout: PageLayout, pad: string): string {
   const viewParts: string[] = [];
   if (layout.view?.theme) viewParts.push(`"theme": ${JSON.stringify(layout.view.theme)}`);
   if (layout.view?.frame) viewParts.push(`"frame": [${layout.view.frame[0]}, ${layout.view.frame[1]}]`);
@@ -189,5 +301,6 @@ function pageBody(layout: PageLayout, pad: string): string {
   if (layout.view?.icons && layout.view.icons !== 1) viewParts.push(`"icons": ${Math.round(layout.view.icons * 100) / 100}`);
   if (layout.view?.spacing) viewParts.push(`"spacing": [${layout.view.spacing.map((v) => Math.round(v * 100) / 100).join(', ')}]`);
   const view = viewParts.length ? `${pad}"view": { ${viewParts.join(', ')} },\n` : '';
-  return `${view}${pad}"nodes": ${block(nodeLines)},\n${pad}"edges": ${block(edgeLines)}`;
+  const template = layout.template ? `${pad}"template": ${templateBody(layout.template, pad)},\n` : '';
+  return `${view}${template}${pad}"nodes": ${block(nodeLines(layout.nodes, pad), pad)},\n${pad}"edges": ${block(edgeLines(layout.edges, pad), pad)}`;
 }

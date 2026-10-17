@@ -1,0 +1,56 @@
+@startuml hexagonal-order-service
+' Order service, ports and adapters. The source groups by package; nothing
+' says "hexagon": the template reads the package names, stereotypes and names.
+actor Customer
+actor "Back Office" as BackOffice
+package "adapters.in" as AdaptersIn {
+  [Web Shop UI] as WebUi
+  [REST Controller] as RestController
+  [Admin CLI] as AdminCli
+  [Payment Webhook Consumer] as WebhookConsumer
+}
+package "application" as App {
+  interface "PlaceOrderUseCase" as PlaceOrder <<port>>
+  interface "TrackOrderQuery" as TrackOrder <<port>>
+  interface "ConfirmPaymentUseCase" as ConfirmPayment <<port>>
+  [Order Service] as OrderService
+  interface "OrderRepository" as OrderRepo <<port>>
+  interface "PaymentGateway" as PaymentPort <<port>>
+  interface "EventPublisher" as EventPort <<port>>
+}
+package "domain" as Domain {
+  [Order] as Order
+  [Pricing Policy] as Pricing
+}
+package "adapters.out" as AdaptersOut {
+  [Postgres Order Repository] as PgRepo
+  [Stripe Payment Client] as StripeClient
+  [Kafka Event Publisher] as KafkaPub
+}
+database "Orders DB" as OrdersDb
+queue "order-events" as Topic
+cloud "Stripe API" as Stripe
+
+Customer --> WebUi
+BackOffice --> AdminCli
+WebUi --> RestController
+RestController --> PlaceOrder
+RestController --> TrackOrder
+AdminCli --> TrackOrder
+WebhookConsumer --> ConfirmPayment
+OrderService ..|> PlaceOrder
+OrderService ..|> TrackOrder
+OrderService ..|> ConfirmPayment
+OrderService --> Order
+OrderService --> Pricing
+OrderService --> OrderRepo
+OrderService --> PaymentPort
+OrderService --> EventPort
+PgRepo ..|> OrderRepo
+StripeClient ..|> PaymentPort
+KafkaPub ..|> EventPort
+PgRepo --> OrdersDb
+StripeClient --> Stripe
+KafkaPub --> Topic
+Stripe ..> WebhookConsumer : webhook
+@enduml

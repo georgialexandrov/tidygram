@@ -5,7 +5,9 @@ import { parseArgs } from 'node:util';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, type LayoutMode } from './layout/auto.ts';
-import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout } from './layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, TEMPLATE_KINDS, withPageLayout, type TemplateKind } from './layout/layout-file.ts';
+import { applyTemplate, removeTemplate, unassigned } from './layout/template/index.ts';
+import type { TemplateScene } from './scene/template.ts';
 import { parseDiagram } from './model/diagram.ts';
 import { DiagramSvg } from './render/DiagramSvg.tsx';
 import { loadAvoid } from './scene/avoid.ts';
@@ -16,7 +18,7 @@ import { buildAnyScene } from './scene/any.ts';
 import { DIAGRAM_FILE, convertedPathFor, layoutPathFor } from './paths.ts';
 import { convert, TARGET_EXTENSION, type ConvertTarget } from './convert/index.ts';
 
-const USAGE = `Usage: pnpm render <diagram.puml|.mmd|.drawio> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--no-write]
+const USAGE = `Usage: pnpm render <diagram.puml|.mmd|.drawio> [-o out.svg] [--relayout | --reset | --fit W:H] [--theme modern] [--scale 1.5|max] [--template layered|hexagonal|clean|none] [--no-write]
        pnpm render <diagram> --to drawio|puml|mermaid [-o out] [--force] [layout options as above]
 
 Reads diagram.layout.json next to the diagram (if any), places nodes that have no
@@ -28,6 +30,9 @@ back unless --no-write is given.
   --fit W:H    re-arrange to fill a frame of that aspect ratio (16:9, 1:1, 210:297)
   --theme X    ${Object.keys(THEMES).join(' | ')} (stored in the layout file)
   --scale N    size of text and icons (1 = 100%), or "max" for the largest that fits
+  --template T architecture template: layered (bands), hexagonal (ports & adapters),
+               clean (rings), or none (back to the free layout); stored in the layout file.
+               Prints the guessed layers, unassigned elements and dependency violations
   --page P     multi-page draw.io: the page to render, by id, name or number (1 = first);
                each page keeps its own layout in the sidecar
   --to X       convert instead of rendering: writes the diagram in another format, with its
@@ -44,6 +49,7 @@ const { values, positionals } = parseArgs({
     fit: { type: 'string' },
     theme: { type: 'string' },
     scale: { type: 'string' },
+    template: { type: 'string' },
     page: { type: 'string' },
     'no-write': { type: 'boolean', default: false },
     to: { type: 'string' },
@@ -79,6 +85,12 @@ if (values.theme) {
   layout = { ...layout, view: { ...layout.view, theme: values.theme } };
 }
 layout = await ensureLayout(diagram, layout, mode);
+if (values.template) {
+  const kind = values.template.toLowerCase();
+  if (kind === 'none' || kind === 'off') layout = await ensureLayout(diagram, removeTemplate(layout), 'fill');
+  else if ((TEMPLATE_KINDS as string[]).includes(kind)) layout = applyTemplate(diagram, layout, kind as TemplateKind);
+  else throw new Error(`--template expects ${TEMPLATE_KINDS.join(', ')} or none, got ${values.template}`);
+}
 if (values.fit) {
   const m = /^(\d+(?:\.\d+)?)[:x/](\d+(?:\.\d+)?)$/.exec(values.fit);
   if (!m) throw new Error(`--fit expects W:H, got ${values.fit}`);
@@ -98,6 +110,7 @@ if (values.scale) {
 }
 
 const scene = buildAnyScene(diagram, layout, avoid);
+if (layout.template && scene.kind === 'graph' && scene.template) reportTemplate(scene.template);
 
 if (values.to) writeConverted(values.to, file);
 else {
@@ -110,6 +123,18 @@ const after = serializeLayout(withPageLayout(sidecar, pageKey, layout));
 if (!values['no-write'] && after !== before) {
   writeFileSync(layoutPath, after);
   console.log(`wrote ${layoutPath}`);
+}
+
+/** What the template made of the diagram: members per layer, what no signal placed, which lines break the rule. */
+function reportTemplate(t: TemplateScene) {
+  for (const l of t.layers) {
+    const ids = [...t.assigned].filter(([, layer]) => layer === l.id).map(([id]) => id);
+    console.log(`  ${l.label.padEnd(22)} ${ids.join(', ') || '-'}`);
+  }
+  const open = unassigned(diagram, layout.template!);
+  if (open.length) console.log(`unassigned (in the default layer): ${open.join(', ')}`);
+  console.log(t.violations.length ? `${t.violations.length} violation${t.violations.length > 1 ? 's' : ''}:` : 'no violations');
+  for (const v of t.violations) console.log(`  ${v.edge}: ${v.message}`);
 }
 
 /** `--to`: the converted source, plus its sidecar for PlantUML and Mermaid, never on top of the input's own files. */

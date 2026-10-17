@@ -157,6 +157,94 @@ runs of spaces; note attachment and hidden lines don't survive draw.io; a
 note link reads back from draw.io as a dashed line. The full per-fixture
 list of losses is asserted in `tests/convert.test.ts` (`LOSSES`).
 
+## Architecture templates
+
+One picture where the layers are bands, a hexagon or rings, applied to a
+diagram you don't own: component, C4, class, ArchiMate, Mermaid flowchart or
+draw.io architecture diagrams. The source never says which layer an element
+is in, so the template and the element → layer assignment live in the
+sidecar (`template`, see layout.json); the source stays untouched.
+
+    pnpm render fixtures/architecture/layered-web-shop.puml --template layered
+    pnpm render fixtures/architecture/hexagonal-order-service.puml --template hexagonal --theme primary
+    pnpm render fixtures/architecture/clean-flowchart.mmd --template clean --fit 16:9
+    pnpm render x.puml --template none     # back to the free layout from before
+
+The CLI prints each layer's members, the unassigned elements and the
+violations. Fixtures in `fixtures/architecture/`: a hexagonal order service
+(ports, driving/driven adapters, DB, queue, an external payment API), a
+layered web shop with one deliberate violation and one element nothing
+names, a C4 container diagram, a clean-architecture Mermaid flowchart
+with two outward lines, and a draw.io file with loosely named swimlanes
+("Web tier", "Services", "Data").
+
+| Template | Picture | Violations |
+|---|---|---|
+| **Layered** | full-width bands top to bottom (default Presentation / Application / Domain / Infrastructure; ArchiMate: Business / Application / Technology), titles in a gutter on the left. Each band is a row (wrapped round-robin into more rows when long); rows are ordered by a few barycentric sweeps (each element under the average of its neighbours in other bands, nearer bands weigh more, same-band neighbours half), packed without overlaps by isotonic regression around those wishes, then improved by adjacent swaps that shorten the lines | a line pointing up (a lower layer using a higher one). `relaxed` (default) lets a realization point up: implementing a higher layer's interface is dependency inversion. `strict` flags those too, and lines that skip a band. ArchiMate defaults to `off` (serving lines point up by design) |
+| **Hexagonal** | the application in a flat-topped hexagon, the domain in its own hexagon inside, application elements above and below it; inbound ports on the left outline, outbound ports on the right (their lollipop or box centre exactly on the line, ordered by their partners); adapters in columns outside: driving left, driven right, what touches a port or the core next to the hexagon, what only adapters reach (users, databases, external systems) one column further out. Adapter panels behind each side | an adapter using the core directly (not through a port); the core or a port depending on an adapter; the domain using the application around it |
+| **Clean / onion** | concentric rings inside out (default Entities / Use cases / Interface adapters / Frameworks & drivers), drawn as ellipses 1.5× wider than tall (boxes and slides are wide). Each ring's members are spread evenly round it; the angular order follows their neighbours (the circular mean of what they connect to, inner rings first, then all), the whole ring rotated to match; the radius is the smallest that keeps the ring clear of the one inside and its members apart. Titles at the top of each ring | a dependency pointing outward. `relaxed` lets the interface adapters use the frameworks & drivers ring (a repository talking to its database); `strict` flags every outward line |
+
+**Guessing.** Every element gets a template-neutral role first, from the
+strongest signal: its stereotype (`<<port>>`, `<<adapter>>`, `<<entity>>`,
+ArchiMate's `business actor` / `application component` / `technology node`),
+"port" in its name, a strong kind (actor/person, database, queue, storage,
+interface), the names of its containers (`package domain`, `adapters.in`,
+`infrastructure`, a Mermaid subgraph called `usecases`), its own name, id and
+C4 technology (`OrderRepository`, `REST Controller`, `[PostgreSQL]`), then a
+weak kind (cloud, C4 system/container). A stereotype or container that names
+one of the template's layers outright (`package "Domain"`, a renamed layer
+"Persistence") wins unless something more specific came first; generic
+signals (a container called "adapters" or "frameworks") yield to a more
+specific name. Each template maps roles to its layers (C4: the API and
+workers are the application). What's left goes by graph position: between
+what it uses and what uses it (one band down, one ring in); in the hexagon a
+port the core implements is inbound and one it uses outbound, an adapter that
+implements a port is driven, one that uses the core or an inbound port is
+driving, then sources drive and sinks are driven. Notes follow what they
+annotate. Anything still open goes to the default layer (Application, Use
+cases) and is listed as **unassigned**. Guesses are stored as `guess` and
+re-guessed whenever the diagram loads, so a source edit can move an element
+nobody confirmed; a drag stores the layer in `assign`, which is never
+re-guessed.
+
+**Rendering.** Bands, hexagons, panels and rings are scene elements
+(`src/scene/template.ts`), derived from where the members are, the way
+containers fit their children: a drag, a size change or a fit can never
+leave an element outside its layer. Placement (`src/layout/template/`) uses
+the same functions, so right after placing the geometry is exactly the
+planned one. Themed in every theme (`layerFills`, `layerStroke`,
+`layerTitle`, `warning`). Violations are drawn in the theme's warning colour,
+thicker, with a warning triangle on the line (its tooltip says why). The
+source's containers are hidden while a template is on (their names fed the
+guesses). SVG and PNG export draw everything; **→ draw.io** writes the
+backdrop as locked shapes on their own bottom layer (`pumlTemplate=1`, which
+our reader skips, so the file reads back as the same diagram) and colours
+violated lines; **→ PlantUML / Mermaid** carry the template in the converted
+sidecar, re-keyed.
+
+**Editor.**
+- **Template** key in the toolbar (glyph + name, latched when on): None /
+  Layered / Hexagonal / Clean, and the rule set (relaxed, strict, off) while
+  one is on. Applying is one undoable step; switching kinds keeps the
+  original free layout; **None** restores it (also undoable).
+- **Drag into another band, ring or zone** to reassign: while dragging, the
+  backdrop holds still and the target layer is outlined in blue; on release
+  the element is assigned there (pinned) and the template re-places around
+  it, everything else keeping its order. Ports dropped on the other side of
+  the hexagon become outbound (or inbound). Dragging within a layer is just a
+  move.
+- **Findings** panel (bottom left): violations (yellow, like warnings) and
+  unassigned elements; clicking one selects the line or element. Collapsible.
+- **Auto layout** re-places everything (hand-placed elements keep their spot
+  as a hint); **Reset** drops the template too; Theme / Size / Text / Icons
+  re-place in the same order so the gaps still fit.
+- **Fit to frame** keeps the arrangement and only chooses size, gaps and
+  (layered) elements per row, trying 21–147 placements in a few ms.
+
+Not done: C4-style tiers (people top, system boundary middle, external
+systems right); zoom levels (C4 context → container → component as switchable
+views) — the sidecar has room for them as a `views` map shaped like `pages`.
+
 ## Use
 
     pnpm install
@@ -165,6 +253,7 @@ list of losses is asserted in `tests/convert.test.ts` (`LOSSES`).
     pnpm render fixtures/food-delivery.puml -o out/food-delivery.svg
     pnpm render fixtures/food-delivery.puml --theme modern --fit 16:9   # FIT_DEBUG=1 prints every candidate's score
     pnpm render fixtures/drawio/pages.drawio --page Details             # one page of a multi-page draw.io file → pages-p2.svg
+    pnpm render fixtures/architecture/layered-web-shop.puml --template layered   # bands; also hexagonal, clean, none
 
 Editor: drag elements (they become pinned), drag a box title to move the
 box with its contents, pull a line to bend it, double-click a bend to remove
@@ -190,8 +279,8 @@ a drag on empty canvas pans there. Selected elements get a dashed blue
 outline; the source panel highlights every selected declaration.
 
 Toolbar: one row. **Diagram picker** · page selector (multi-page draw.io
-only) · Auto layout, Reset, Unpin, Straighten · Undo, Redo · Frame + Fit to
-frame · **Display** (popover) · Fit view · Source · readout (selected,
+only) · Auto layout, Reset, Unpin, Straighten · Undo, Redo · **Template**
+(see Architecture templates) · Frame + Fit to frame · **Display** (popover) · Fit view · Source · readout (selected,
 elements, lines, pinned; counts drop out when narrow) · lamps (warnings,
 save state; never hidden) · **Export SVG** with a menu · **?**. Narrow
 windows lose the nameplate first, then label words ("Auto", "Export", an
@@ -281,6 +370,25 @@ Delete still work); nothing wraps.
   offset from the label's automatic position.
 - Entries for ids that vanish from the source are kept, so a rename can be
   undone without losing the position.
+- **`template`** (optional): the architecture template on this page. While
+  it is on, `nodes` hold the template's arrangement and `free` the free
+  layout it replaced; sidecars without it are free layouts exactly as
+  before. `layers` (optional) replaces the kind's default list (bands top to
+  bottom, rings inside out; plain strings work as ids and labels; hexagonal
+  roles are fixed and only take labels), `rules` is `relaxed` (default),
+  `strict` or `off`. `assign` holds what a human assigned (by dragging),
+  `guess` the machine's guesses, one entry per line. Unknown kinds or layer
+  ids fall back instead of failing the file. Draw.io pages each have their
+  own.
+
+      "template": {
+        "kind": "layered",
+        "layers": [{ "id": "presentation", "label": "Presentation" }, { "id": "application", "label": "Application" }, { "id": "domain", "label": "Domain" }, { "id": "infrastructure", "label": "Infrastructure" }],
+        "rules": "strict",
+        "assign": { "Cart": "application" },
+        "guess": { "Api": "presentation", "Pg": "infrastructure" },
+        "free": { "nodes": { "Api": { "x": 120, "y": 40 } }, "edges": {} }
+      },
 - **Multi-page draw.io files**: the first page's layout is the top level,
   exactly as above, so single-page sidecars (and every sidecar written before
   pages existed) stay valid. Each other page gets its own `view`, `nodes`
@@ -333,8 +441,8 @@ size, which is why rendering stays SVG (crisp text, real DOM hit-testing,
 
 ## Test
 
-    pnpm test        # parser, layout merge, routing (no lines through elements, < 50 ms), fit, themes, conversion round trips
+    pnpm test        # parser, layout merge, routing (no lines through elements, < 50 ms), fit, themes, conversion round trips, templates
     pnpm typecheck
-    node scripts/smoke.mjs out/editor.png   # with pnpm dev running: drag, bend, undo, theme, fit, in headless Chrome
+    node scripts/smoke.mjs out/editor.png   # with pnpm dev running: drag, bend, undo, theme, fit, templates (apply, drag into a band, undo, off), in headless Chrome
     node scripts/smoke-types.mjs [dir]      # every fixture: render, open time, "not supported" panel, draw.io pages (~10 s)
     scripts/png.sh out/x.svg out/x.png 1800 # rasterise an SVG to look at it

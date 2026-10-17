@@ -1,10 +1,12 @@
 // End-to-end smoke test: drives the running editor (pnpm dev) in headless
 // Chrome over the DevTools protocol, drags a node and pulls a line, and checks
 // what was written to layout.json; then multi-select (shift-click, group drag,
-// one undo), marquee, and layout export. Usage: node scripts/smoke.mjs [screenshot.png]
-// Restores fixtures/food-delivery.layout.json afterwards.
+// one undo), marquee, and layout export; then an architecture template on
+// fixtures/architecture/layered-web-shop.puml (apply from the menu, drag into another band, undo,
+// findings panel, turn off and back on with undo). Usage: node scripts/smoke.mjs [screenshot.png]
+// Restores fixtures/food-delivery.layout.json and the architecture sidecar afterwards.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +16,8 @@ const LAYOUT = new URL('../fixtures/food-delivery.layout.json', import.meta.url)
 const PORT = 9333;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const original = readFileSync(LAYOUT, 'utf8');
+const ARCH = new URL('../fixtures/architecture/layered-web-shop.layout.json', import.meta.url);
+const archOriginal = existsSync(ARCH) ? readFileSync(ARCH, 'utf8') : null;
 
 const chrome = spawn(CHROME, [
   '--headless=new',
@@ -207,6 +211,69 @@ try {
   const shot = process.argv[2];
   if (shot) writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
 
+  // 6. Architecture template: Layered from the menu, drag Cart into the Application band, undo,
+  //    pick the violation in the findings panel, turn the template off, undo brings it back.
+  const readArch = () => JSON.parse(readFileSync(ARCH, 'utf8'));
+  const pickTemplate = async (kind) => {
+    await evaluate(`document.querySelector('.template-menu .opener').click()`);
+    await sleep(100);
+    await evaluate(`document.querySelector('[data-template="${kind}"]').click()`);
+    await sleep(700);
+  };
+  await send('Page.navigate', { url: 'http://localhost:5199/?file=fixtures/architecture/layered-web-shop.puml' });
+  for (let i = 0; i < 100; i++) {
+    await sleep(100);
+    if (await evaluate(`document.querySelector('.app')?.dataset.loaded === 'fixtures/architecture/layered-web-shop.puml'`)) break;
+  }
+  await sleep(600);
+  await pickTemplate('none'); // a demo sidecar may have one on already
+  const freeNodes = readArch().nodes;
+  await pickTemplate('layered');
+  const applied = readArch();
+  const backdrop = await evaluate(`!!document.querySelector('[data-template="layered"] [data-layer="application"]')`);
+  const panelViolations = await evaluate(`document.querySelector('.template-panel')?.dataset.violations`);
+  const cart = await centreOf('[data-id="Cart"]');
+  const band = await evaluate(`(() => { const r = document.querySelector('[data-layer="application"] rect').getBoundingClientRect(); return [r.y, r.height]; })()`);
+  const bandMid = [cart[0], band[0] + band[1] / 2];
+  await mouse('mouseMoved', cart[0], cart[1], 0);
+  await mouse('mousePressed', cart[0], cart[1]);
+  for (let i = 1; i <= 10; i++) await mouse('mouseMoved', cart[0], cart[1] + ((bandMid[1] - cart[1]) * i) / 10);
+  await sleep(100);
+  const dropShown = await evaluate(`document.querySelector('[data-drop]')?.getAttribute('data-drop') ?? null`);
+  await mouse('mouseReleased', bandMid[0], bandMid[1], 0);
+  await sleep(700);
+  const dropped = readArch();
+  const cartInBand = await evaluate(`(() => {
+    const c = document.querySelector('[data-id="Cart"]').getBoundingClientRect();
+    const b = document.querySelector('[data-layer="application"] rect').getBoundingClientRect();
+    return c.top >= b.top && c.bottom <= b.bottom;
+  })()`);
+  await undoKey();
+  await sleep(700);
+  const undoneDrop = readArch();
+  await evaluate(`document.querySelector('.template-panel-list [data-edge-ref]').click()`);
+  await sleep(200);
+  const panelSelects = await evaluate(`document.querySelector('.template-panel-list button.selected')?.dataset.edgeRef ?? null`);
+  await pickTemplate('none');
+  const off = readArch();
+  const offBackdrop = await evaluate(`!!document.querySelector('.canvas [data-template]')`);
+  await undoKey();
+  await sleep(700);
+  const backOn = readArch();
+  const templateResults = {
+    applied: applied.template?.kind,
+    backdrop,
+    panelViolations,
+    dropShown,
+    assignAfterDrop: dropped.template?.assign,
+    cartInBand,
+    assignAfterUndo: undoneDrop.template?.assign,
+    panelSelects,
+    offRestoresFree: !off.template && Object.entries(freeNodes).every(([id, p]) => off.nodes[id]?.x === p.x && off.nodes[id]?.y === p.y),
+    offBackdrop,
+    undoBringsBack: backOn.template?.kind,
+  };
+
   const results = {
     rendered: `${nodes} nodes, ${edges} edges`,
     zoom: k.toFixed(3),
@@ -225,6 +292,7 @@ try {
     groupUndone: { Admin: groupUndone.nodes.Admin, Courier: groupUndone.nodes.Courier },
     marquee: { startsEmpty, selected: marqueeSel },
     layoutExport: { menuOpen, name: exported?.name, matchesDisk: exported?.text === onDisk, copyMatches: copied === onDisk },
+    template: templateResults,
     browserErrors: logs,
   };
   console.log(JSON.stringify(results, null, 2));
@@ -260,6 +328,17 @@ try {
     exported?.name === 'food-delivery.layout.json' &&
     exported.text === onDisk &&
     copied === onDisk &&
+    templateResults.applied === 'layered' &&
+    templateResults.backdrop &&
+    templateResults.panelViolations === '1' &&
+    templateResults.dropShown === 'application' &&
+    templateResults.assignAfterDrop?.Cart === 'application' &&
+    templateResults.cartInBand &&
+    !templateResults.assignAfterUndo?.Cart &&
+    templateResults.panelSelects === 'Pricing..>Api' &&
+    templateResults.offRestoresFree &&
+    !templateResults.offBackdrop &&
+    templateResults.undoBringsBack === 'layered' &&
     logs.length === 0;
   console.log(ok ? 'SMOKE OK' : 'SMOKE FAILED');
   ws.close();
@@ -268,4 +347,6 @@ try {
   chrome.kill();
   await sleep(600); // a debounced save may still be in flight
   writeFileSync(LAYOUT, original);
+  if (archOriginal === null) rmSync(ARCH, { force: true });
+  else writeFileSync(ARCH, archOriginal);
 }

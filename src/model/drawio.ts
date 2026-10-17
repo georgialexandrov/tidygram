@@ -346,6 +346,8 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
     }
     if (!cellEl || id === undefined) continue;
     if (cellEl.attrs.visible === '0') continue;
+    // Our own template backdrop (bands, hexagons, rings): pictures of the layout, not diagram elements.
+    if (/(^|;)pumlTemplate=1/.test(cellEl.attrs.style ?? '')) continue;
     cells.push({
       id,
       parent: cellEl.attrs.parent,

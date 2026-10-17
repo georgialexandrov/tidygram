@@ -172,6 +172,16 @@ export function rekeyLayout(layout: LayoutFile, ids: IdMap): LayoutFile {
     const to = ids.edges[id];
     if (to !== undefined) next.edges[to] = { ...entry, ...(entry.via ? { via: entry.via.map(([x, y]) => [x, y] as [number, number]) } : {}) };
   }
+  // The template lives in the sidecar, not the source, so it travels with it: assignments and the stashed free layout re-keyed too.
+  if (layout.template) {
+    const t = layout.template;
+    const map = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).flatMap(([id, layer]) => (ids.nodes[id] !== undefined ? [[ids.nodes[id]!, layer]] : [])));
+    next.template = { ...t, assign: map(t.assign), guess: map(t.guess) };
+    if (t.free) {
+      const free = rekeyLayout({ version: 1, nodes: t.free.nodes, edges: t.free.edges }, ids);
+      next.template.free = { nodes: free.nodes, edges: free.edges };
+    }
+  }
   return next;
 }
 

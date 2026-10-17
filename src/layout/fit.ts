@@ -9,6 +9,8 @@ import { containerPad } from '../scene/shapes.ts';
 import { largestScale } from './scale.ts';
 import { elkPositions, shapesFor } from './auto.ts';
 import type { LayoutFile, Point } from './layout-file.ts';
+import { settleTemplate } from './template/index.ts';
+import { buildTemplateScene } from '../scene/template.ts';
 
 /**
  * Fit to frame: re-lays out the diagram so it fills a target aspect ratio.
@@ -178,8 +180,57 @@ function fitOrdered(diagram: Diagram, layout: LayoutFile, frame: Point): FitResu
   };
 }
 
+/**
+ * With a template on, the template decides the arrangement; fitting only
+ * chooses the size, the gaps and (layered) how many elements a band holds per
+ * row, keeping every element's order. Each candidate is placed (no ELK, no
+ * routing: a few ms) and scored like ordered diagrams: how big the text ends
+ * up in the frame, with a small bonus for filling it.
+ */
+function fitTemplate(diagram: Diagram, layout: LayoutFile, frame: Point): FitResult {
+  const started = performance.now();
+  const ratio = frame[0] / frame[1];
+  const base = themeFor(layout.view?.theme);
+  const kind = layout.template!.kind;
+  const rows = kind === 'layered' ? [3, 4, 5, 6, 7, 8, 10] : [undefined];
+  let best: { score: number; layout: LayoutFile; scale: number; achieved: number; fill: number; name: string } | undefined;
+  let tried = 0;
+  for (const scale of [1, 1.25, 1.5, 1.75, 2, 2.4, 2.8]) {
+    const theme = scaledTheme(base, scale, layout.view?.text ?? 1, layout.view?.icons ?? 1);
+    const shapes = shapesFor(diagram, theme);
+    for (const spread of [1, 1.4, 2]) {
+      for (const perRow of rows) {
+        tried++;
+        const view = { ...layout.view, frame, scale };
+        const placed = settleTemplate(diagram, { ...layout, view }, { perRow, spread });
+        const boxes = new Map(diagram.nodes.filter((n) => placed.nodes[n.id]).map((n) => [n.id, nodeBox(placed.nodes[n.id]!, shapes.get(n.id)!)]));
+        const t = buildTemplateScene(diagram, placed.template!, boxes, theme);
+        const all = [...boxes.values(), t.bounds];
+        const x0 = Math.min(...all.map((b) => b.x));
+        const y0 = Math.min(...all.map((b) => b.y));
+        const w = Math.max(...all.map((b) => b.x + b.w)) - x0;
+        const h = Math.max(...all.map((b) => b.y + b.h)) - y0;
+        const frameW = Math.max(w, h * ratio);
+        const fill = (w * h) / (frameW * (frameW / ratio));
+        const score = Math.log(scale / frameW) + 0.15 * Math.log(fill);
+        if (!best || score > best.score) {
+          const name = `${kind}, size ${Math.round(scale * 100)}%, gaps ${spread}×${perRow ? `, ${perRow} per row` : ''}`;
+          best = { score, layout: placed, scale, achieved: w / h, fill, name };
+        }
+      }
+    }
+  }
+  const fitted = best!.layout;
+  if (fitted.view?.scale === 1) {
+    const { scale: _s, ...view } = fitted.view;
+    fitted.view = view;
+  }
+  return { layout: fitted, achieved: best!.achieved, scale: best!.scale, fill: best!.fill, variant: best!.name, tried, timings: { layout: Math.round(performance.now() - started), route: 0, scale: 0 } };
+}
+
 export async function fitToFrame(diagram: Diagram, layout: LayoutFile, frame: Point, avoid?: Avoid): Promise<FitResult> {
   if (diagram.special) return fitOrdered(diagram, layout, frame);
+  if (layout.template) return fitTemplate(diagram, layout, frame);
   const ratio = frame[0] / frame[1];
   const theme = themeFor(layout.view?.theme);
   const shapes = shapesFor(diagram, theme);

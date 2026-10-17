@@ -1,0 +1,34 @@
+flowchart LR
+  %% A clean-architecture slice as a Mermaid flowchart: subgraphs carry the layers.
+  subgraph frameworks [Frameworks and drivers]
+    Browser[Web browser]
+    PG[(PostgreSQL)]
+    SMTP[SMTP server]
+  end
+  subgraph adapters [Interface adapters]
+    Ctl[Order controller]
+    Pres[Order presenter]
+    Repo[SQL order repository]
+    Mail[Email notifier]
+  end
+  subgraph usecases [Use cases]
+    Place[Place order interactor]
+    InPort{{PlaceOrder input port}}
+    OutPort{{OrderGateway output port}}
+  end
+  subgraph entities [Entities]
+    Order[Order]
+    Line[Order line]
+  end
+  Browser --> Ctl
+  Ctl --> InPort
+  Place -.-> InPort
+  Place --> Order
+  Order --> Line
+  Place --> OutPort
+  Repo -.-> OutPort
+  Repo --> PG
+  Place --> Pres
+  Pres --> Browser
+  Mail --> SMTP
+  Place --> Mail

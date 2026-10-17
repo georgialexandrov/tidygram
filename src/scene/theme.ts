@@ -58,6 +58,12 @@ export interface Theme {
     nestedStroke: string;
     labelFill: string;
     labelStroke: string;
+    /** Architecture templates: dependency violations (line and marker). */
+    warning: string;
+    /** Band / ring / hexagon fills, outermost (or top) first, core last. */
+    layerFills: string[];
+    layerStroke: string;
+    layerTitle: string;
   };
   dash: { dependency: string; note: string };
 }
@@ -107,6 +113,10 @@ const classic: Theme = {
     nestedStroke: '#181818',
     labelFill: '#FFFFFF',
     labelStroke: 'none',
+    warning: '#D9480F',
+    layerFills: ['#FBFBFB', '#F5F5F5', '#EEEEEE', '#E6E6E6'],
+    layerStroke: '#B8B8B8',
+    layerTitle: '#181818',
   },
   dash: { dependency: '6 4', note: '4 3' },
 };
@@ -159,6 +169,10 @@ const modern: Theme = {
     nestedStroke: '#EAECF0',
     labelFill: '#FFFFFF',
     labelStroke: '#E0E7FF',
+    warning: '#D92D20',
+    layerFills: ['#F9FAFC', '#F3F4FB', '#ECEEFB', '#E3E7FB'],
+    layerStroke: '#DCE0EA',
+    layerTitle: '#5B6478',
   },
   dash: { dependency: '5 4', note: '2 3' },
 };
@@ -196,6 +210,10 @@ const midnight = variant('midnight', 'Midnight (dark)', {
   nestedStroke: '#232C3D',
   labelFill: '#0B0F17',
   labelStroke: '#164E63',
+  warning: '#F97066',
+  layerFills: ['#0E131D', '#111825', '#141E2E', '#172438'],
+  layerStroke: '#243045',
+  layerTitle: '#8B95A7',
 });
 
 const blueprint = variant(
@@ -230,6 +248,10 @@ const blueprint = variant(
     nestedStroke: '#3D6893',
     labelFill: '#0E2C4F',
     labelStroke: '#7A6A3A',
+    warning: '#FF7B72',
+    layerFills: ['#103256', '#12385F', '#153F69', '#184674'],
+    layerStroke: '#3D6893',
+    layerTitle: '#8FB4DA',
   },
   {
     font: "'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace",
@@ -273,6 +295,10 @@ const editorial = variant(
     nestedStroke: '#E7DED1',
     labelFill: '#FBF8F3',
     labelStroke: '#F4C9A6',
+    warning: '#B42318',
+    layerFills: ['#F8F4EE', '#F3EDE4', '#EDE5D9', '#E7DDCE'],
+    layerStroke: '#E2D9CC',
+    layerTitle: '#78716C',
   },
   { font: "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif", widthFactor: 1.1, nodeWeight: 400 },
 );
@@ -309,6 +335,10 @@ const mono = variant(
     nestedStroke: '#C8C8C8',
     labelFill: '#FFFFFF',
     labelStroke: '#111111',
+    warning: '#111111',
+    layerFills: ['#FFFFFF', '#F7F7F7', '#EFEFEF', '#E6E6E6'],
+    layerStroke: '#9A9A9A',
+    layerTitle: '#111111',
   },
   { containerRadius: 4, bendRadius: 4 },
 );
@@ -335,6 +365,10 @@ const mint = variant('mint', 'Mint', {
   nestedFill: '#FFFFFF',
   nestedStroke: '#E3EFE9',
   labelStroke: '#BDEBD3',
+  warning: '#D92D20',
+  layerFills: ['#F8FCFA', '#EFF8F3', '#E6F3EC', '#DCEEE3'],
+  layerStroke: '#D3E6DB',
+  layerTitle: '#3F6B58',
 });
 
 /** Matches the editor chrome: black ink on warm white, primaries only as signals. */
@@ -370,6 +404,11 @@ const primary = variant(
     nestedStroke: '#A8A49A',
     labelFill: '#FDFCFA',
     labelStroke: '#CC4116',
+    // The editor's warning yellow is too light for a line on warm white; its ochre carries it.
+    warning: '#B88A00',
+    layerFills: ['#FDFCFA', '#F3F1EC', '#E9E6DF', '#DEDBD3'],
+    layerStroke: '#A8A49A',
+    layerTitle: '#1A1A1A',
   },
   {
     font: "Futura, 'Futura PT', 'Century Gothic', 'Avenir Next', sans-serif",

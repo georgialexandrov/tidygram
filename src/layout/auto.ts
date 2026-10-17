@@ -6,6 +6,7 @@ import { containerPad, nodeShape, type NodeShape, type Pad } from '../scene/shap
 import { measureText } from '../scene/measure.ts';
 import { themeFor, themeOf, type Theme } from '../scene/theme.ts';
 import type { LayoutFile } from './layout-file.ts';
+import { refreshTemplate, relayoutTemplate } from './template/index.ts';
 
 const GAP = 24;
 
@@ -267,6 +268,13 @@ function seedFromSource(diagram: Diagram, next: LayoutFile, shapes: Map<string, 
 export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: LayoutMode = 'fill'): Promise<LayoutFile> {
   // Ordered diagrams (sequence, ...) compute their layout on every build; only dragged columns are stored.
   if (diagram.special) return mode === 'fill' ? layout : { ...layout, nodes: {}, edges: {} };
+  // A template owns the arrangement: new elements go into their layer, Auto re-places; Reset drops the template too.
+  if (layout.template) {
+    if (mode === 'fill') return refreshTemplate(diagram, layout);
+    if (mode === 'auto') return relayoutTemplate(diagram, layout);
+    const { template: _template, ...rest } = layout;
+    layout = rest;
+  }
   const theme = themeOf(layout.view);
   const shapes = shapesFor(diagram, theme);
   const pad = containerPad(theme);

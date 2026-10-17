@@ -3,7 +3,7 @@ import type { Point } from '../layout/layout-file.ts';
 import type { ArrowHead } from '../model/types.ts';
 import type { Box } from '../scene/containers.ts';
 import { frameRect } from '../scene/frame.ts';
-import { roundedPath, trimEnd } from '../scene/geometry.ts';
+import { pointAt, roundedPath, trimEnd } from '../scene/geometry.ts';
 import { LINE_HEIGHT, type TextBlock } from '../scene/measure.ts';
 import type { Scene, SceneContainer, SceneEdge, SceneNode } from '../scene/scene.ts';
 import type { Theme } from '../scene/theme.ts';
@@ -12,6 +12,7 @@ import type { AnyScene } from '../scene/any.ts';
 import { SequenceContent } from './SequenceSvg.tsx';
 import { GanttContent, TimingContent } from './TimeSvg.tsx';
 import { f, Text } from './text.tsx';
+import { TemplateBackdrop } from './TemplateSvg.tsx';
 
 export const EDITOR_COLORS = {
   selected: '#2F6FEB',
@@ -331,7 +332,8 @@ function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
   const c = theme.colors;
   const base =
     e.kind === 'noteLink' ? c.noteLink : e.kind === 'generalization' || e.kind === 'realization' ? c.generalization : e.dashed ? c.dependency : c.line;
-  const color = selected ? EDITOR_COLORS.selected : base;
+  const warn = e.violation ? c.warning : undefined;
+  const color = selected ? EDITOR_COLORS.selected : (warn ?? base);
   const pts = e.points;
   if (pts.length < 2) return null;
   let line = pts;
@@ -355,7 +357,8 @@ function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
           onDoubleClick={(ev) => ix.onEdgeDoubleClick(id, ev)}
         />
       )}
-      <path d={d} fill="none" stroke={color} strokeWidth={selected ? 2 : c.lineWidth} strokeDasharray={dash} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+      <path d={d} fill="none" stroke={color} strokeWidth={selected ? 2 : warn ? c.lineWidth * 1.8 : c.lineWidth} strokeDasharray={dash} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+      {e.violation && <ViolationMark e={e} theme={theme} />}
       {e.edge.double && (
         // Two parallel lines: a wide stroke with the background drawn down its middle.
         <>
@@ -415,11 +418,31 @@ function EdgeViewImpl({ e, theme, ix, selected }: EdgeProps) {
   );
 }
 
-/** The diagram content. Containers first, then edges, then nodes, so nodes stay grabbable on top. */
+/**
+ * A dependency that breaks the template's rule: a warning triangle on the
+ * line, a third of the way along (the middle is the label's), with the reason
+ * as its tooltip.
+ */
+function ViolationMark({ e, theme }: { e: SceneEdge; theme: Theme }) {
+  const [x, y] = pointAt(e.points, e.label ? 0.3 : 0.5);
+  const s = 9 * Math.sqrt(theme.scale);
+  const c = theme.colors;
+  return (
+    <g data-violation={e.edge.id} style={{ pointerEvents: 'none' }}>
+      <title>{e.violation}</title>
+      <path d={`M${f(x)},${f(y - s)} L${f(x + s * 1.05)},${f(y + s * 0.8)} L${f(x - s * 1.05)},${f(y + s * 0.8)} Z`} fill={c.warning} stroke={c.background} strokeWidth={1.5} strokeLinejoin="round" />
+      <path d={`M${f(x)},${f(y - s * 0.38)} V${f(y + s * 0.2)}`} stroke={c.background} strokeWidth={1.6 * Math.sqrt(theme.scale)} strokeLinecap="round" />
+      <circle cx={f(x)} cy={f(y + s * 0.5)} r={0.95 * Math.sqrt(theme.scale)} fill={c.background} />
+    </g>
+  );
+}
+
+/** The diagram content. Template backdrop and containers first, then edges, then nodes, so nodes stay grabbable on top. */
 export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }) {
   const theme = scene.theme;
   return (
     <g>
+      {scene.template && <TemplateBackdrop t={scene.template} theme={theme} />}
       {scene.containers.map((c) => (
         <ContainerView key={c.id} c={c} theme={theme} ix={ix} />
       ))}

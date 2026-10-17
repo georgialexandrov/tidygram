@@ -1,0 +1,33 @@
+@startuml c4-container
+!include <C4/C4_Container>
+title Container diagram: online shop
+Person(customer, "Customer", "Buys things online")
+Person(staff, "Staff", "Manages the catalogue")
+System_Boundary(shop, "Online Shop") {
+  Container(spa, "Single-Page App", "React", "Catalogue, cart and checkout")
+  Container(mobile, "Mobile App", "Kotlin", "Shopping on the go")
+  Container(backoffice, "Back Office", "Angular", "Catalogue and orders")
+  Container(api, "API", "NestJS", "Orders, payments, accounts")
+  Container(worker, "Fulfilment Worker", "Go", "Picks, packs, ships")
+  ContainerDb(db, "Database", "PostgreSQL", "Orders and customers")
+  ContainerDb(cache, "Cache", "Redis", "Sessions and carts")
+  ContainerQueue(bus, "Event Bus", "Kafka", "Order events")
+}
+System_Ext(stripe, "Stripe", "Card payments")
+System_Ext(mail, "Mail Provider", "Transactional email")
+System_Ext(idp, "Identity Provider", "Sign-in")
+Rel(customer, spa, "Uses", "HTTPS")
+Rel(customer, mobile, "Uses")
+Rel(staff, backoffice, "Uses", "HTTPS")
+Rel(spa, api, "Calls", "JSON/HTTPS")
+Rel(mobile, api, "Calls", "JSON/HTTPS")
+Rel(backoffice, api, "Calls", "JSON/HTTPS")
+Rel(api, db, "Reads/writes", "SQL")
+Rel(api, cache, "Caches")
+Rel(api, bus, "Publishes")
+Rel(bus, worker, "Delivers")
+Rel(worker, db, "Updates")
+Rel(api, stripe, "Charges", "HTTPS")
+Rel(worker, mail, "Sends", "SMTP")
+Rel(api, idp, "Verifies tokens")
+@enduml

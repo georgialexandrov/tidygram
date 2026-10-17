@@ -7,6 +7,7 @@ import { containerPad, nodeShape, type NodeShape } from './shapes.ts';
 import { measureText, type TextBlock } from './measure.ts';
 import { routeEdges, type RouteShape } from './route.ts';
 import { themeOf, type Theme } from './theme.ts';
+import { buildTemplateScene, type TemplateScene } from './template.ts';
 
 export interface SceneNode {
   node: DNode;
@@ -42,6 +43,8 @@ export interface SceneEdge {
   /** Labels at the ends (multiplicities). */
   fromLabel?: EndLabel;
   toLabel?: EndLabel;
+  /** With an architecture template on: why this line breaks the template's dependency rule. */
+  violation?: string;
 }
 
 export interface Scene {
@@ -51,6 +54,8 @@ export interface Scene {
   containers: SceneContainer[];
   edges: SceneEdge[];
   bounds: Box;
+  /** Bands, hexagon or rings behind everything, when the layout has a template on. */
+  template?: TemplateScene;
 }
 
 export interface BuildOptions {
@@ -63,6 +68,12 @@ export interface BuildOptions {
    */
   previous?: Scene;
   dirty?: { nodes: ReadonlySet<string>; edges: ReadonlySet<string> };
+  /**
+   * While dragging with a template on: the backdrop from before the drag.
+   * Derived bands would stretch to follow the dragged element; frozen, they
+   * stay put and the drop is judged against them.
+   */
+  frozenTemplate?: TemplateScene;
 }
 
 /** Turns the parsed model + layout into absolute geometry. Every node must already have a position. */
@@ -99,7 +110,8 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     }
     return depth;
   };
-  const boxes = containerBoxes(diagram, positions, shapes, containerPad(theme));
+  // A template's bands replace the source's grouping: containers are hidden while one is on (their names fed the guesses).
+  const boxes = layout.template ? new Map<string, Box>() : containerBoxes(diagram, positions, shapes, containerPad(theme));
   // Swimlanes run the full height of the diagram, side by side.
   const lanes = diagram.containers.filter((c) => c.kind === 'swimlane' && boxes.has(c.id));
   if (lanes.length) {
@@ -184,7 +196,19 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     return scene;
   });
 
+  let template: TemplateScene | undefined;
+  if (layout.template) {
+    template = options.frozenTemplate ?? buildTemplateScene(diagram, layout.template, new Map(nodes.map((n) => [n.node.id, n.box])), theme);
+    const why = new Map(template.violations.map((v) => [v.edge, v.message]));
+    for (let i = 0; i < edges.length; i++) {
+      const message = why.get(edges[i]!.edge.id);
+      // Reused (drag fast path) lines are shared with the previous scene: copy before marking.
+      if (message !== edges[i]!.violation) edges[i] = message ? { ...edges[i]!, violation: message } : { ...edges[i]!, violation: undefined };
+    }
+  }
+
   const all: Box[] = [...nodes.map((n) => n.box), ...containers.map((c) => c.box)];
+  if (template && template.bounds.w > 0) all.push(template.bounds);
   for (const e of edges) for (const [x, y] of e.points) all.push({ x, y, w: 0, h: 0 });
   for (const e of edges) for (const l of [e.fromLabel, e.toLabel]) if (l) all.push({ x: l.x - l.text.width / 2, y: l.y - l.text.height / 2, w: l.text.width, h: l.text.height });
   for (const e of edges) if (e.label) all.push({ x: e.label.x - e.label.text.width / 2 - 6 * theme.scale, y: e.label.y - e.label.text.height / 2 - 2 * theme.scale, w: e.label.text.width + 12 * theme.scale, h: e.label.text.height + 4 * theme.scale });
@@ -193,7 +217,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const y0 = Math.min(...all.map((b) => b.y));
   const x1 = Math.max(...all.map((b) => b.x + b.w));
   const y1 = Math.max(...all.map((b) => b.y + b.h));
-  return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+  return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, template };
 }
 
 /** A multiplicity next to the line's start: a little way along it, set off to one side. */

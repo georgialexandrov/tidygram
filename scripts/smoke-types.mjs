@@ -14,6 +14,7 @@ const files = [
   ...readdirSync(dir).filter((f) => /\.(puml|mmd)$/.test(f)).sort(),
   ...readdirSync(new URL('mermaid/', dir)).filter((f) => /\.mmd$/.test(f)).sort().map((f) => `mermaid/${f}`),
   ...readdirSync(new URL('drawio/', dir)).filter((f) => /\.drawio(\.xml)?$/.test(f)).sort().map((f) => `drawio/${f}`),
+  ...readdirSync(new URL('architecture/', dir)).filter((f) => /\.(puml|mmd|drawio)$/.test(f)).sort().map((f) => `architecture/${f}`),
   ...readdirSync(new URL('unsupported/', dir)).sort().map((f) => `unsupported/${f}`),
 ];
 const unsupported = (f) => f.startsWith('unsupported/');

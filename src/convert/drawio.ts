@@ -4,7 +4,8 @@ import type { ArrowHead, DNode, Diagram, NodeKind, ParseWarning } from '../model
 import type { AnyScene } from '../scene/any.ts';
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
 import { FREE_SIZE, containerPad, nodeShape } from '../scene/shapes.ts';
-import { themeOf } from '../scene/theme.ts';
+import { themeOf, type Theme } from '../scene/theme.ts';
+import { RING_ASPECT, type TemplateScene } from '../scene/template.ts';
 import { KindLosses, warn, type ConvertResult, type IdMap } from './common.ts';
 
 /**
@@ -46,6 +47,10 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
   const vertexId = (id: string) => cellId.get(`n:${id}`) ?? cellId.get(`c:${id}`);
 
   const cells: string[] = [];
+  /** The template backdrop: its own locked layer under everything (see `templateCells`). */
+  const backdrop = scene?.kind === 'graph' && scene.template ? templateCells(scene.template, scene.theme, fresh) : [];
+  if (backdrop.length) losses.add('template written as background shapes (the template and its assignments stay in the sidecar only)');
+  const violated = new Set(scene?.kind === 'graph' && scene.template ? scene.template.violations.map((v) => v.edge) : []);
   /** Absolute box of each written vertex, for children's offsets and line ends. */
   const written = new Map<string, Box>();
   const containerIds = new Set(diagram.containers.map((c) => c.id));
@@ -124,6 +129,7 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     style += markerStyle('end', e.head);
     if (e.tail !== 'none') style += markerStyle('start', e.tail);
     if (e.dashed) style += 'dashed=1;';
+    if (violated.has(e.id) && scene?.kind === 'graph') style += `strokeColor=${scene.theme.colors.warning};strokeWidth=2;`;
     if (e.hidden) {
       style += 'strokeColor=none;';
       losses.add('hidden line written with no stroke');
@@ -157,6 +163,7 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     '    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0">',
     '      <root>',
     '        <mxCell id="0" />',
+    ...backdrop.map((c) => `        ${c}`),
     '        <mxCell id="1" parent="0" />',
     ...cells.map((c) => `        ${c}`),
     '      </root>',
@@ -191,6 +198,41 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
   const next: LayoutFile = { version: 1, nodes: {}, edges: {} };
   if (view && Object.keys(view).length) next.view = view;
   return { source, layout: next, warnings: [...warnings, ...losses.warnings('draw.io')], ids };
+}
+
+// ---- template backdrop ---------------------------------------------------------------------------
+
+/**
+ * Bands, hexagons, panels and rings as plain draw.io shapes with their
+ * titles, on a locked layer of their own below the diagram (layers draw in
+ * document order). Marked `pumlTemplate=1`, which draw.io keeps and our
+ * reader skips, so reading the file back gives the same diagram.
+ */
+function templateCells(t: TemplateScene, theme: Theme, fresh: (base: string) => string): string[] {
+  const layer = fresh('template');
+  const c = theme.colors;
+  const font = `fontColor=${c.layerTitle};fontStyle=1;fontSize=${Math.round(theme.size.container)};`;
+  const base = `html=1;pumlTemplate=1;locked=1;strokeColor=${c.layerStroke};${font}`;
+  const geo = (b: Box) => `<mxGeometry x="${r(b.x)}" y="${r(b.y)}" width="${r(b.w)}" height="${r(b.h)}" as="geometry" />`;
+  const cell = (id: string, label: string, style: string, box: Box) => `<mxCell id="${attr(fresh(id))}" value="${attr(html(label))}" style="${style}" vertex="1" parent="${attr(layer)}">${geo(box)}</mxCell>`;
+  const label = (id: string) => t.layers.find((l) => l.id === id)?.label ?? id;
+  const out = [`<mxCell id="${attr(layer)}" value="Template" style="locked=1;pumlTemplate=1;" parent="0" />`];
+  for (const b of t.bands) {
+    const align = t.kind === 'layered' ? 'align=left;verticalAlign=middle;spacingLeft=12;' : 'align=center;verticalAlign=top;spacingTop=8;';
+    out.push(cell(`band-${b.id}`, label(b.id), `rounded=1;arcSize=4;absoluteArcSize=1;fillColor=${b.fill};${align}${base}`, b.box));
+  }
+  for (const h of t.hexagons) {
+    const box = { x: h.cx - h.r, y: h.cy - (h.r * Math.sqrt(3)) / 2, w: h.r * 2, h: h.r * Math.sqrt(3) };
+    // draw.io's hexagon with a quarter-width inset is the flat-topped regular one.
+    out.push(cell(`hex-${h.id}`, label(h.id), `shape=hexagon;perimeter=hexagonPerimeter2;fixedSize=0;size=0.25;fillColor=${h.fill};verticalAlign=top;spacingTop=8;${base}`, box));
+  }
+  if (t.center) {
+    for (const ring of [...t.rings].reverse()) {
+      const box = { x: t.center[0] - ring.r * RING_ASPECT, y: t.center[1] - ring.r, w: ring.r * 2 * RING_ASPECT, h: ring.r * 2 };
+      out.push(cell(`ring-${ring.id}`, label(ring.id), `ellipse;fillColor=${ring.fill};verticalAlign=top;spacingTop=6;${base}`, box));
+    }
+  }
+  return out;
 }
 
 // ---- styles ------------------------------------------------------------------------------------

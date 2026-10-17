@@ -1,0 +1,44 @@
+@startuml layered-web-shop
+' A layered web shop. One line breaks the layering on purpose:
+' the pricing rules call back up into the REST API. Feature Flags has no
+' lines and a name that says nothing: the template lists it as unassigned.
+actor Shopper
+actor "Shop Admin" as Admin
+[Storefront (React)] as Storefront
+[Admin Console] as AdminConsole
+[REST API] as Api
+[Checkout Service] as Checkout
+[Catalog Service] as CatalogService
+[Account Service] as AccountService
+package "domain" as Domain {
+  [Cart] as Cart
+  [Product] as Product
+  [Customer] as Customer
+  [Pricing Rules] as Pricing
+}
+[Product Repository] as ProductRepo
+[Customer Repository] as CustomerRepo
+[Email Sender] as Email
+database "PostgreSQL" as Pg
+queue "Job Queue" as Jobs
+[Feature Flags] as Flags
+
+Shopper --> Storefront
+Admin --> AdminConsole
+Storefront --> Api
+AdminConsole --> Api
+Api --> Checkout
+Api --> CatalogService
+Api --> AccountService
+Checkout --> Cart
+Checkout --> Pricing
+Checkout --> Email
+CatalogService --> Product
+CatalogService --> ProductRepo
+AccountService --> Customer
+AccountService --> CustomerRepo
+ProductRepo --> Pg
+CustomerRepo --> Pg
+Email --> Jobs
+Pricing ..> Api : formats prices
+@enduml

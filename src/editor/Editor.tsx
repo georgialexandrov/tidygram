@@ -4,10 +4,15 @@ import { SourcePanel } from './SourcePanel.tsx';
 import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, hasSourceLayout, type LayoutMode } from '../layout/auto.ts';
-import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout, type LayoutFile, type Point, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
+import { applyTemplate, dropIntoTemplate, removeTemplate, settleTemplate, unassigned } from '../layout/template/index.ts';
+import { rulesOf } from '../layout/template/defs.ts';
+import { regionAt, type TemplateScene } from '../scene/template.ts';
+import { TemplateHighlight } from '../render/TemplateSvg.tsx';
+import { TemplatePanel, TemplatePicker } from './TemplatePanel.tsx';
 import { parseDiagram } from '../model/diagram.ts';
 import type { Diagram, ParseWarning } from '../model/types.ts';
-import { AnyContent, DiagramSvg, type Interaction } from '../render/DiagramSvg.tsx';
+import { AnyContent, DiagramSvg, EDITOR_COLORS, type Interaction } from '../render/DiagramSvg.tsx';
 import { buildAnyScene, type AnyScene } from '../scene/any.ts';
 import { sourceItems } from '../model/items.ts';
 import type { Avoid } from '../scene/avoid.ts';
@@ -171,6 +176,10 @@ type Drag =
       dirtyNodes: ReadonlySet<string>;
       others: { x: number; y: number }[];
       moved: boolean;
+      /** Template backdrop from before the drag: frozen while dragging, and what the drop is judged against. */
+      template?: TemplateScene;
+      /** Primary element's anchor offset from its centre (a port's lollipop is what lands on the outline). */
+      anchor: Point;
     }
   | { kind: 'edge'; id: string; start: Point; before: LayoutFile }
   | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean }
@@ -212,6 +221,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const [view, setView] = useState<View>({ x: 40, y: 40, k: 1 });
   const [guides, setGuides] = useState<Guide[]>([]);
   const [marquee, setMarquee] = useState<Box | null>(null);
+  /** While dragging with a template on: the layer the drop would move the element into (outlined), if not its own. */
+  const [dropLayer, setDropLayer] = useState<string | null>(null);
+  /** The template backdrop held still during a node drag (see BuildOptions.frozenTemplate). */
+  const frozenTemplate = useRef<TemplateScene | undefined>(undefined);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showWarnings, setShowWarnings] = useState(false);
   const [grid, setGrid] = useState(() => localStorage.getItem('puml-layout:grid') !== 'off');
@@ -388,7 +401,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     try {
       const t0 = performance.now();
       const prev = previousScene.current;
-      const fast = dirty.current && prev?.kind === 'graph' ? { previous: prev, dirty: dirty.current } : {};
+      const fast = dirty.current && prev?.kind === 'graph' ? { previous: prev, dirty: dirty.current, frozenTemplate: frozenTemplate.current } : {};
       const built = buildAnyScene(doc.diagram, layout, avoid, fast);
       perf.record(dirty.current ? 'scene (drag)' : 'scene (full)', performance.now() - t0);
       previousScene.current = built;
@@ -458,7 +471,12 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     // Lines that end on an enclosing container move with its border, so they count as dirty too.
     const dirtyNodes = new Set([...ids, ...ids.flatMap((id) => ancestry(diagram, parents.get(id)))]);
     const others = diagram.nodes.flatMap((n) => (!moving.has(n.id) && l.nodes[n.id] ? [l.nodes[n.id]!] : []));
-    drag.current = { kind: 'nodes', ids, primary, start: toDiagram(e.clientX, e.clientY), before: l, origin, originVia: viaOf(l), dirtyNodes, others, moved: false };
+    const s = sceneRef.current;
+    const template = s?.kind === 'graph' ? s.template : undefined;
+    const sn = s?.kind === 'graph' ? s.nodes.find((n) => n.node.id === primary) : undefined;
+    const anchor: Point = sn ? [sn.anchor.cx - (sn.box.x + sn.box.w / 2), sn.anchor.cy - (sn.box.y + sn.box.h / 2)] : [0, 0];
+    frozenTemplate.current = template;
+    drag.current = { kind: 'nodes', ids, primary, start: toDiagram(e.clientX, e.clientY), before: l, origin, originVia: viaOf(l), dirtyNodes, others, moved: false, template, anchor };
     capture(e);
   };
 
@@ -589,6 +607,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         }
         dirty.current = { nodes: d.dirtyNodes, edges: new Set() };
         setLayout(moveNodes(d.before, doc.diagram, d.origin, d.originVia, Math.round(dx), Math.round(dy)));
+        if (d.template && primary) {
+          const at: Point = [primary.x + dx + d.anchor[0], primary.y + dy + d.anchor[1]];
+          const region = regionAt(d.template, at, 12 / k + 8);
+          setDropLayer(region && region !== d.template.assigned.get(d.primary) ? region : null);
+        }
         break;
       }
       case 'edge': {
@@ -637,12 +660,19 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     drag.current = null;
     // The drag is over: the next build routes and nudges every line again (a new layout object forces it).
     dirty.current = null;
+    frozenTemplate.current = undefined;
     setGuides([]);
+    setDropLayer(null);
     if (!d) return;
     switch (d.kind) {
-      case 'nodes':
-        if (d.moved) commit(setPinned(layoutRef.current, d.ids, true), d.before);
+      case 'nodes': {
+        if (!d.moved) break;
+        const pinned = setPinned(layoutRef.current, d.ids, true);
+        // Dropped into another band, ring or zone: reassigned there (one undo step with the move).
+        const moved = doc && d.template ? dropIntoTemplate(doc.diagram, pinned, d.template, d.ids, d.primary) : undefined;
+        commit(moved ?? pinned, d.before);
         break;
+      }
       case 'via':
       case 'label':
         if (d.moved) commit({ ...layoutRef.current }, d.before);
@@ -719,6 +749,29 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     [doc, commit],
   );
 
+  /** Template picker: one undoable step each way; None brings the free layout from before back. */
+  const setTemplate = useCallback(
+    async (kind: TemplateKind | null) => {
+      if (!doc) return;
+      const l = layoutRef.current;
+      if (kind === (l.template?.kind ?? null)) return;
+      commit(kind ? applyTemplate(doc.diagram, l, kind) : await ensureLayout(doc.diagram, removeTemplate(l), 'fill'));
+      setSelEdge(undefined);
+      needsFit.current = true;
+    },
+    [doc, commit],
+  );
+
+  const pickTemplate = useCallback((kind: TemplateKind | null) => void setTemplate(kind), [setTemplate]);
+
+  const setRules = useCallback(
+    (rules: TemplateRules) => {
+      const l = layoutRef.current;
+      if (l.template) commit({ ...l, template: { ...l.template, rules } });
+    },
+    [commit],
+  );
+
   const updateViewSettings = useCallback(
     (patch: { theme?: string; frame?: Point | null; scale?: number; text?: number; icons?: number; spacing?: Point }) => {
       const l = layoutRef.current;
@@ -740,10 +793,12 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       }
       if (patch.frame === null) delete view.frame;
       else if (patch.frame) view.frame = patch.frame;
-      commit({ ...l, view });
+      const sized = patch.theme !== undefined || patch.scale !== undefined || patch.text !== undefined || patch.icons !== undefined;
+      // Sizes changed under a template: re-place in the same order so gaps, hexagon and rings fit again.
+      commit(l.template && sized && doc ? settleTemplate(doc.diagram, { ...l, view }) : { ...l, view });
       if (patch.theme !== undefined || patch.frame !== undefined || patch.scale !== undefined) needsFit.current = true;
     },
-    [commit],
+    [commit, doc],
   );
 
   const fitFrame = useCallback(async () => {
@@ -796,6 +851,21 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       observer.disconnect();
       cancelAnimationFrame(frameId);
     };
+  }, []);
+
+  const template = layout.template;
+  /** Elements no signal placed (they sit in the default layer); recomputed only when the template changes. */
+  const openIds = useMemo(() => (doc && template && !doc.diagram.special ? unassigned(doc.diagram, template) : []), [doc, template]);
+  const templateScene = scene?.kind === 'graph' ? scene.template : undefined;
+  // Stable callbacks: the findings panel is memoized and must not re-render on every drag frame.
+  const nameOf = useCallback((id: string) => doc?.diagram.nodes.find((n) => n.id === id)?.label.split('\n')[0] || id, [doc]);
+  const selectOnly = useCallback((id: string) => {
+    setSelNodes(new Set([id]));
+    setSelEdge(undefined);
+  }, []);
+  const selectEdge = useCallback((id: string) => {
+    setSelEdge(id);
+    setSelNodes(new Set());
   }, []);
 
   /** Source lines of the selection: element declarations and the relations of a selected line. */
@@ -1063,6 +1133,15 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           </button>
         </div>
         <span className="sep" aria-hidden="true" />
+        <div className="keys" role="group" aria-label="Template">
+          <TemplatePicker
+            kind={template?.kind ?? null}
+            rules={template && doc ? rulesOf(template, doc.diagram) : null}
+            disabled={blank || !!doc?.diagram.special}
+            onPick={pickTemplate}
+            onRules={setRules}
+          />
+        </div>
         <div className="keys" role="group" aria-label="Frame and fit">
           <select
             className="frame-select"
@@ -1325,6 +1404,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             </dd>
             <dt>Bend</dt>
             <dd>pull a line; double-click a bend to remove</dd>
+            <dt>Layer</dt>
+            <dd>with a template on, drag into another band, ring or zone</dd>
             <dt>No snap</dt>
             <dd>
               hold <kbd>Alt</kbd>
@@ -1364,6 +1445,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               </g>
             )}
             {scene && <AnyContent scene={scene} ix={stableIx} />}
+            {dropLayer && templateScene && <TemplateHighlight t={templateScene} layer={dropLayer} color={EDITOR_COLORS.selected} />}
             {frameBox && <rect className="frame-border" x={frameBox.x} y={frameBox.y} width={frameBox.w} height={frameBox.h} />}
             {guides.map((g, i) =>
               g.axis === 'x' ? (
@@ -1376,6 +1458,18 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           </g>
         </svg>
         {doc && blank && <BlankPanel doc={doc} onWarnings={() => setShowWarnings(true)} />}
+        {doc && template && templateScene && (
+          <TemplatePanel
+            kind={template.kind}
+            scene={templateScene}
+            unassigned={openIds}
+            nameOf={nameOf}
+            selectedNodes={selNodes}
+            selectedEdge={selEdge}
+            onSelectNode={selectOnly}
+            onSelectEdge={selectEdge}
+          />
+        )}
         {/* Messages float over the canvas rather than push it down, so opening them never moves the diagram. */}
         <div className="notices">
           {error && (

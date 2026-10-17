@@ -1420,6 +1420,207 @@ button.link {
   stroke-width: 1.5;
 }
 
+/* ------------------------------------------------------------------ */
+/* Architecture templates: the picker key, its menu, the findings panel */
+/* ------------------------------------------------------------------ */
+
+.template-glyph {
+  flex: none;
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+}
+
+.toolbar .template-menu .opener {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* On: latched like the Source switch, the glyph inked. */
+.toolbar .template-menu.on .opener {
+  background: var(--key-down);
+  box-shadow: inset 0 1px 2px rgba(26, 26, 26, 0.14);
+}
+
+.template-menu.on .opener .template-glyph,
+.menu button[aria-checked='true'] .template-glyph {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+.menu-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The chosen template: a signal-orange bar on the left edge, the one place the menu uses colour. */
+.toolbar .menu button[role='menuitemradio'][aria-checked='true'] {
+  box-shadow: inset 3px 0 0 var(--signal);
+  font-weight: 600;
+}
+
+.toolbar .menu button[aria-checked='true'] .hint {
+  font-weight: 400;
+}
+
+.template-rules {
+  padding: 6px 8px 4px;
+}
+
+.segmented {
+  display: inline-flex;
+}
+
+.toolbar .menu .segmented button,
+.toolbar .segmented button {
+  display: inline-flex;
+  justify-content: center;
+  width: auto;
+  background: var(--key);
+  border-color: var(--rule-strong);
+  border-bottom-color: #8f8b81;
+  height: 24px;
+  padding: 0 10px;
+  font-family: var(--f-label);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.toolbar .segmented button:first-child {
+  margin-left: 0;
+  border-radius: var(--r) 0 0 var(--r);
+}
+
+.toolbar .segmented button:last-child {
+  border-radius: 0 var(--r) var(--r) 0;
+}
+
+.toolbar .menu .segmented button[aria-checked='true'],
+.toolbar .segmented button[aria-checked='true'] {
+  background: var(--key-down);
+  box-shadow: inset 0 1px 2px rgba(26, 26, 26, 0.14);
+  color: var(--ink);
+}
+
+.menu-note {
+  margin: 0;
+  padding: 4px 8px 6px;
+  color: var(--ink-2);
+  font-size: 11px;
+  white-space: normal;
+  max-width: 260px;
+}
+
+.template-panel {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 4;
+  width: 340px;
+  max-width: calc(100% - 24px);
+  background: var(--ground);
+  border: 1px solid var(--ink);
+  border-top-width: 2px;
+  border-radius: var(--r);
+  box-shadow: 0 4px 16px rgba(26, 26, 26, 0.16);
+  font-variant-numeric: tabular-nums;
+}
+
+.template-panel button {
+  font: 12px/16px var(--f-body);
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.template-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  text-align: left;
+}
+
+.template-panel-head .field-label {
+  color: var(--ink);
+}
+
+.template-panel-head .count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+}
+
+.template-panel-head .count.warn {
+  color: var(--ink);
+}
+
+.template-panel .glyph {
+  fill: var(--yellow);
+  stroke: var(--ink);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+.template-panel-head .caret {
+  margin-left: auto;
+  fill: var(--ink-2);
+}
+
+.template-panel.has-violations {
+  background: var(--yellow-wash);
+}
+
+.template-panel-list {
+  margin: 0;
+  padding: 4px 0;
+  max-height: 220px;
+  overflow: auto;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.template-panel-list button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 12px;
+  text-align: left;
+}
+
+.template-panel-list button:hover {
+  background: var(--key-hover);
+}
+
+/* Selected row: the focus blue, like the selection on the canvas. */
+.template-panel-list button.selected {
+  box-shadow: inset 3px 0 0 var(--blue);
+  background: var(--key);
+}
+
+.row-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-why {
+  color: var(--ink-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /*
  * Narrow windows: the row gives up decoration first (the nameplate's model
  * word, then the nameplate), then shortens labels, and only below 1060px
@@ -1448,6 +1649,10 @@ button.link {
 
 @media (max-width: 1400px) {
   .wide-only {
+    display: none;
+  }
+
+  .toolbar .template-menu:not(.on) .template-name {
     display: none;
   }
 
