@@ -59,3 +59,30 @@ export function groupByFolder(files: string[]): { folder: string; files: { path:
   }
   return [...groups].map(([folder, list]) => ({ folder, files: list }));
 }
+
+export type FileFormat = 'plantuml' | 'mermaid' | 'drawio';
+
+/** Short badge text per format, in the picker and on its key. */
+export const FORMAT_BADGE: Record<FileFormat, string> = { plantuml: 'PUML', mermaid: 'MMD', drawio: 'DRAWIO' };
+
+/** The format a file name implies; a sniffed `.xml` is draw.io (the server only lists draw.io XML). */
+export function formatOf(path: string): FileFormat {
+  if (/\.(drawio|drawio\.xml|xml)$/i.test(path)) return 'drawio';
+  if (/\.(mmd|mermaid)$/i.test(path)) return 'mermaid';
+  return 'plantuml';
+}
+
+/**
+ * Picker filter: every whitespace-separated word must occur in the path or
+ * the format's names (`mmd`, `mermaid`, `drawio`, `draw.io`, `puml`,
+ * `plantuml`), case-insensitive. An empty query keeps everything.
+ */
+export function filterFiles(files: string[], query: string): string[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return files;
+  const names: Record<FileFormat, string> = { plantuml: 'puml plantuml', mermaid: 'mmd mermaid', drawio: 'drawio draw.io' };
+  return files.filter((f) => {
+    const hay = `${f.toLowerCase()} ${names[formatOf(f)]}`;
+    return words.every((w) => hay.includes(w));
+  });
+}

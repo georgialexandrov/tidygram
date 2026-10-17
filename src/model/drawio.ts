@@ -1,5 +1,5 @@
 import type { ArrowHead, DContainer, DEdge, DNode, EdgeKind, NodeKind, ParseWarning, SourceBox } from './types.ts';
-import type { ParseResult } from './parse.ts';
+import type { ParseOptions, ParseResult } from './parse.ts';
 import { inflateRaw } from './inflate.ts';
 import { decodeEntities, findElement, parseXml, type XmlElement } from './xml.ts';
 
@@ -10,7 +10,9 @@ import { decodeEntities, findElement, parseXml, type XmlElement } from './xml.ts
  * layout, so every element brings its absolute box (`sourceBox`) and every
  * line its waypoints (`sourceVia`): the file's geometry is the default layout
  * and ELK only runs when asked. Colours, fonts and label offsets are ignored
- * (themes own the look). Only the first page is read.
+ * (themes own the look). One page is read at a time (`options.page`, the
+ * first by default); a multi-page file reports all of them in `pages` so the
+ * editor can offer the others.
  */
 
 const DRAWIO_HEAD = /^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(mxfile|mxGraphModel)\b/;
@@ -269,36 +271,62 @@ function edgeKind(head: ArrowHead, tail: ArrowHead, dashed: boolean): EdgeKind {
 
 const empty = (warnings: ParseWarning[]): ParseResult => ({ diagram: { family: 'description', direction: 'TB', nodes: [], containers: [], edges: [] }, warnings });
 
-export function parseDrawio(source: string): ParseResult {
+/**
+ * Page keys: the page id draw.io writes on every `<diagram>`, else its name,
+ * else `#n` (1-based). Made unique, since hand-edited files can repeat them.
+ */
+export function drawioPageKeys(pages: XmlElement[]): { key: string; name: string }[] {
+  const seen = new Set<string>();
+  return pages.map((p, i) => {
+    let key = p.attrs.id || p.attrs.name || `#${i + 1}`;
+    if (seen.has(key)) key = `${key}#${i + 1}`;
+    seen.add(key);
+    return { key, name: p.attrs.name || `Page-${i + 1}` };
+  });
+}
+
+export function parseDrawio(source: string, options: ParseOptions = {}): ParseResult {
   const warnings: ParseWarning[] = [];
   const doc = parseXml(source);
   const file = findElement(doc, 'mxfile');
   let model: XmlElement | undefined;
   /** Compressed pages have no line structure of their own: everything points at the `<diagram>`. */
   let fixedLine: number | undefined;
+  /** Multi-page files: the page list and which one this is, attached to whatever we return. */
+  let paging: Pick<ParseResult, 'pages' | 'page'> = {};
+  const withPaging = (r: ParseResult): ParseResult => ({ ...r, ...paging });
 
   if (file) {
     const pages = file.children.filter((c) => c.name === 'diagram');
-    const page = pages[0];
-    if (!page) return empty([{ line: file.line, text: '', message: 'draw.io file has no pages' }]);
-    if (pages.length > 1) {
-      const others = pages.slice(1).map((p, i) => `"${p.attrs.name ?? `Page-${i + 2}`}"`);
-      warnings.push({ line: pages[1]!.line, text: '', message: `Only the first page ("${page.attrs.name ?? 'Page-1'}") is laid out; also in the file: ${others.join(', ')}` });
+    if (!pages.length) return empty([{ line: file.line, text: '', message: 'draw.io file has no pages' }]);
+    const keys = drawioPageKeys(pages);
+    let index = 0;
+    const wanted = options.page;
+    if (typeof wanted === 'number') index = wanted >= 0 && wanted < pages.length ? wanted : -1;
+    else if (wanted !== undefined) {
+      index = keys.findIndex((k) => k.key === wanted);
+      if (index < 0) index = keys.findIndex((k) => k.name === wanted);
     }
+    if (index < 0) {
+      warnings.push({ line: file.line, text: '', message: `No page ${JSON.stringify(wanted)}; showing the first ("${keys[0]!.name}")` });
+      index = 0;
+    }
+    if (pages.length > 1) paging = { pages: keys, page: index };
+    const page = pages[index]!;
     model = findElement(page, 'mxGraphModel');
     if (!model && page.text.trim()) {
       try {
         model = findElement(parseXml(decompressPage(page.text.trim())), 'mxGraphModel');
         fixedLine = page.line;
       } catch (e) {
-        return empty([...warnings, { line: page.line, text: '', message: `Could not decompress the page: ${(e as Error).message}` }]);
+        return withPaging(empty([...warnings, { line: page.line, text: '', message: `Could not decompress the page: ${(e as Error).message}` }]));
       }
     }
   } else {
     model = findElement(doc, 'mxGraphModel');
   }
   const root = model && findElement(model, 'root');
-  if (!root) return empty([...warnings, { line: 1, text: '', message: 'No <mxGraphModel><root> found' }]);
+  if (!root) return withPaging(empty([...warnings, { line: 1, text: '', message: 'No <mxGraphModel><root> found' }]));
 
   // ---- cells -----------------------------------------------------------------------------------
   const cells: Cell[] = [];
@@ -492,5 +520,5 @@ export function parseDrawio(source: string): ParseResult {
     const names = [...unknown.entries()].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ');
     warnings.push({ line: fixedLine ?? 1, text: '', message: `${total} shape${total > 1 ? 's' : ''} drawn as plain boxes (no matching element kind): ${names}` });
   }
-  return { diagram: { family: 'description', direction: 'TB', nodes, containers, edges }, warnings };
+  return withPaging({ diagram: { family: 'description', direction: 'TB', nodes, containers, edges }, warnings });
 }

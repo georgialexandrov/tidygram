@@ -10,16 +10,24 @@ export function Popover({
   title,
   className = '',
   align = 'left',
+  disabled = false,
+  onOpenChange,
   children,
 }: {
   label: ReactNode;
   title: string;
   className?: string;
   align?: 'left' | 'right';
+  disabled?: boolean;
+  /** Told after every open/close, e.g. to focus a field in the panel or reset a filter. */
+  onOpenChange?(open: boolean): void;
   children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const changed = useRef(onOpenChange);
+  changed.current = onOpenChange;
+  useEffect(() => changed.current?.(open), [open]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
@@ -38,7 +46,7 @@ export function Popover({
   const close = () => setOpen(false);
   return (
     <div className={`popover ${className}`} ref={root}>
-      <button className={`opener${open ? ' active' : ''}`} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen((o) => !o)} title={title}>
+      <button className={`opener${open ? ' active' : ''}`} disabled={disabled} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen((o) => !o)} title={title}>
         {label}
         <svg className="caret" width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
           <path d="M0 0h8L4 5z" />

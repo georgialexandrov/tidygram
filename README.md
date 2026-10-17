@@ -26,7 +26,7 @@ elements are placed next to what they connect to.
 | Chen ER | ✅ entities, relationships (diamonds), attributes (ellipses, owner-scoped ids), composite attributes, `<<key>>`/`<<multi>>`/`<<derived>>`/`<<weak>>`/`<<identifying>>`, `-N-`, `-(1,N)-`, `=N=` (double line), `=>= d { A, B }` | `chen.puml` |
 | ArchiMate | ✅ `archimate #Layer "X" as A <<type>>`, `Business_Actor(..)`-style macros, Grouping, junctions, every `Rel_*` with its own ends (direction suffixes ignored); no layer colours | `archimate.puml` |
 | nwdiag | ✅ networks as bars, hosts with per-network addresses, shapes, descriptions, groups, peer links; networks stack in source order | `nwdiag.puml` |
-| Salt, regex, EBNF, math, ditaa, ... | recognised and reported; no layout to manage | |
+| Salt, regex, EBNF, math, ditaa, ... | recognised; the editor shows a "not supported yet" panel (`fixtures/unsupported/`) and writes no sidecar | |
 
 The family is detected first because PlantUML reads some keywords per
 type (`interface` is a lollipop in a component diagram and a class box in a
@@ -50,7 +50,7 @@ sidecar works the same way.
 | ER | ✅ crow's feet in symbol and word form (`one or more to zero or many`), aliases, attribute blocks with PK/FK/UK and comments | `er.mmd` |
 | Gantt | ✅ dateFormat, sections, `excludes weekends`/weekdays, `weekend friday`, ids, `after a b`, `until x`, durations d/w/h, end dates (exclusive unless `inclusiveEndDates`), done/crit/milestone; excluded dates are reported, not drawn | `gantt.mmd` |
 | Mindmap | ✅ indentation tree; all node shapes drawn as topics; icons and classes ignored | `mindmap.mmd` |
-| Pie, journey, gitGraph, timeline, quadrant, XY, sankey, requirement, C4, block, packet, architecture, kanban, ... | recognised and reported; no layout to manage | |
+| Pie, journey, gitGraph, timeline, quadrant, XY, sankey, requirement, C4, block, packet, architecture, kanban, ... | recognised; the editor shows a "not supported yet" panel (`fixtures/unsupported/`) and writes no sidecar | |
 
 ## draw.io
 
@@ -68,7 +68,7 @@ layout, not to ELK. Positions in the sidecar are in the file's coordinates.
 
 | | |
 |---|---|
-| Pages | the first `<diagram>` page; a warning names the others |
+| Pages | every `<diagram>` page, one at a time: the editor shows a page selector for multi-page files (`?page=<id>` deep links), the CLI takes `--page <id\|name\|n>`, code passes `parseDiagram(source, name, { page })` (0-based index, page id or name; `ParseResult.pages` lists them). Each page has its own layout in the sidecar (see layout.json) |
 | Compression | inline `<mxGraphModel>` and compressed pages (base64 + raw deflate + URI-encoding), decoded by a built-in inflater (`src/model/inflate.ts`), no dependency |
 | Containers | any cell with children: `swimlane`, `container=1`, labelled groups; nested, child geometry made absolute. Unlabelled `group` cells are invisible in draw.io and are flattened (unless a line points at one) |
 | Tables | ER entities (stack-layout swimlane of text rows) and `shape=table` become entity boxes with their rows; lines to a row attach to the table |
@@ -164,6 +164,7 @@ list of losses is asserted in `tests/convert.test.ts` (`LOSSES`).
     PUML_ROOT=~/diagrams pnpm dev  # edit diagrams in another folder
     pnpm render fixtures/food-delivery.puml -o out/food-delivery.svg
     pnpm render fixtures/food-delivery.puml --theme modern --fit 16:9   # FIT_DEBUG=1 prints every candidate's score
+    pnpm render fixtures/drawio/pages.drawio --page Details             # one page of a multi-page draw.io file → pages-p2.svg
 
 Editor: drag elements (they become pinned), drag a box title to move the
 box with its contents, pull a line to bend it, double-click a bend to remove
@@ -188,11 +189,32 @@ Sequence, Gantt and timing diagrams keep one selected element at a time, and
 a drag on empty canvas pans there. Selected elements get a dashed blue
 outline; the source panel highlights every selected declaration.
 
-Toolbar: one row. File picker (basenames, grouped by folder; full path on
-hover) · Auto layout, Reset, Unpin, Straighten · Undo, Redo · Frame + Fit to
+Toolbar: one row. **Diagram picker** · page selector (multi-page draw.io
+only) · Auto layout, Reset, Unpin, Straighten · Undo, Redo · Frame + Fit to
 frame · **Display** (popover) · Fit view · Source · readout (selected,
-elements, lines, pinned, save state; counts drop out when narrow) · **Export
-SVG** with a menu · **?**.
+elements, lines, pinned; counts drop out when narrow) · lamps (warnings,
+save state; never hidden) · **Export SVG** with a menu · **?**. Narrow
+windows lose the nameplate first, then label words ("Auto", "Export", an
+icon for Fit view), and below 1060 px the Unpin/Straighten keys (U and
+Delete still work); nothing wraps.
+
+- **Diagram picker**: the key shows the open file's format badge (`PUML`,
+  `MMD`, a filled `DRAWIO`) and name; its panel lists every diagram under
+  the root grouped by folder, with a filter field that matches path and
+  format words (`class mmd`, `drawio`, `er plantuml`). Arrows move, Enter
+  opens, Esc closes. `?file=path` deep-links a diagram, `&page=<id>` a
+  draw.io page.
+- **Opening is fast**: ~30–40 ms from fetch to committed scene with a
+  sidecar, ~150 ms when ELK has to lay a diagram out first (`window.__perf
+  .summary()` has `open: fetch/parse/layout/total`). The view fits the
+  window on open and keeps fitting on window resizes until you pan or zoom.
+- **Nothing to arrange**: a type we recognise but can't lay out (Salt, pie,
+  ...) or a file without elements shows a panel saying so instead of an
+  empty grid; nothing is written for it (no sidecar). Fixtures in
+  `fixtures/unsupported/`.
+- **Warnings** (yellow triangle with a count): a list of skipped or
+  approximated source lines that floats over the canvas, so opening it never
+  moves the diagram. Errors float the same way (red square), dismissable.
 
 - **Display** popover:
   - **Theme**: `classic` (PlantUML look), `modern` (indigo), `midnight`
@@ -225,9 +247,17 @@ SVG** with a menu · **?**.
   Export uses the frame as the canvas.
 - **Export**: the orange key downloads SVG; its menu adds PNG (2×, less for very large layouts; rasterised
   from the same SVG), **Layout JSON** (downloads the sidecar exactly as the
-  editor saves it, named `x.layout.json`), **Copy layout JSON**, and
-  **Import layout JSON…** (replaces the layout as one undoable step;
-  elements the file doesn't place are laid out).
+  editor saves it, named `x.layout.json`, all draw.io pages included),
+  **Copy layout JSON**, and **Import layout JSON…** (replaces the layout as
+  one undoable step; elements the file doesn't place are laid out; a
+  multi-page sidecar brings the open page's entry).
+- **Convert to draw.io / PlantUML / Mermaid**: the conversions run when the
+  menu opens (a few ms). A target that can't hold the diagram is disabled
+  and says why (timing → Mermaid: "no timing in Mermaid"; sequence, Gantt,
+  timing → draw.io: "not yet"); the others show their number of losses
+  (yellow triangle), pointing at a row lists what that target can't hold
+  under the menu, and the row's tooltip has the full list. A multi-page
+  draw.io file converts the page on screen.
 
 ## layout.json
 
@@ -251,6 +281,25 @@ SVG** with a menu · **?**.
   offset from the label's automatic position.
 - Entries for ids that vanish from the source are kept, so a rename can be
   undone without losing the position.
+- **Multi-page draw.io files**: the first page's layout is the top level,
+  exactly as above, so single-page sidecars (and every sidecar written before
+  pages existed) stay valid. Each other page gets its own `view`, `nodes`
+  and `edges` under `pages`, keyed by the draw.io page id (which survives
+  renaming the page; files without page ids fall back to the name, then
+  `#n`). A page with nothing stored has no entry. Reordering pages in
+  draw.io moves which page is "first"; ids keep the others straight.
+
+      {
+        "version": 1,
+        "nodes": { "web": { "x": 100, "y": 110 } },
+        "edges": {},
+        "pages": {
+          "p2": { "view": { "theme": "mono" }, "nodes": { "d1": { "x": 140, "y": 90, "pinned": true } }, "edges": {} }
+        }
+      }
+
+  Code: `pageLayout(file, key)` / `withPageLayout(file, key, layout)` in
+  `src/layout/layout-file.ts`; everything else sees one page.
 
 ## How
 
@@ -270,8 +319,12 @@ Measured in Chrome on the fixture (36 elements, 45 lines), `node scripts/perf.mj
 | | per pointer move |
 |---|---|
 | routing while dragging (only lines touching what moves) | ~2 ms |
-| React commit (unchanged elements are memoized) | ~4 ms |
+| React commit (unchanged elements are memoized) | ~4–8 ms (7.5 ms with the fixture's modern theme at 260%) |
 | full re-route + nudging on release | ~17 ms |
+
+Opening a diagram: 30–40 ms in the editor with a sidecar, ~150 ms when ELK
+lays it out first (food-delivery: 145 ms of ELK); `node scripts/smoke-types.mjs`
+opens all 31 fixtures and drags/switches pages in ~10 s.
 
 Fit to frame: ~0.6 s, 16 ELK layouts in a pool of Web Workers
 (`node scripts/fit-timing.mjs`). Drawing is not the bottleneck at this
@@ -283,4 +336,5 @@ size, which is why rendering stays SVG (crisp text, real DOM hit-testing,
     pnpm test        # parser, layout merge, routing (no lines through elements, < 50 ms), fit, themes, conversion round trips
     pnpm typecheck
     node scripts/smoke.mjs out/editor.png   # with pnpm dev running: drag, bend, undo, theme, fit, in headless Chrome
+    node scripts/smoke-types.mjs [dir]      # every fixture: render, open time, "not supported" panel, draw.io pages (~10 s)
     scripts/png.sh out/x.svg out/x.png 1800 # rasterise an SVG to look at it

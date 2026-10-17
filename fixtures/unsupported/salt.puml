@@ -1,0 +1,8 @@
+@startsalt
+' A wireframe: PlantUML draws it, but there is nothing here to lay out.
+{
+  Login    | "alice     "
+  Password | "****      "
+  [Cancel] | [  OK  ]
+}
+@endsalt

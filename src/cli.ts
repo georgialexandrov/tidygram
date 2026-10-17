@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, type LayoutMode } from './layout/auto.ts';
-import { emptyLayout, parseLayout, serializeLayout } from './layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout } from './layout/layout-file.ts';
 import { parseDiagram } from './model/diagram.ts';
 import { DiagramSvg } from './render/DiagramSvg.tsx';
 import { loadAvoid } from './scene/avoid.ts';
@@ -28,6 +28,8 @@ back unless --no-write is given.
   --fit W:H    re-arrange to fill a frame of that aspect ratio (16:9, 1:1, 210:297)
   --theme X    ${Object.keys(THEMES).join(' | ')} (stored in the layout file)
   --scale N    size of text and icons (1 = 100%), or "max" for the largest that fits
+  --page P     multi-page draw.io: the page to render, by id, name or number (1 = first);
+               each page keeps its own layout in the sidecar
   --to X       convert instead of rendering: writes the diagram in another format, with its
                layout (draw.io: in the file; PlantUML/Mermaid: in a sidecar next to it).
                Default output: diagram-<format>.<ext> next to the input, so the two never
@@ -42,6 +44,7 @@ const { values, positionals } = parseArgs({
     fit: { type: 'string' },
     theme: { type: 'string' },
     scale: { type: 'string' },
+    page: { type: 'string' },
     'no-write': { type: 'boolean', default: false },
     to: { type: 'string' },
     force: { type: 'boolean', default: false },
@@ -55,8 +58,13 @@ if (values.help || !file) {
   process.exit(file ? 0 : 1);
 }
 
-const { diagram, warnings } = parseDiagram(readFileSync(file, 'utf8'), file);
+// `--page 2` is the second page; anything that isn't a plain number is a page id or name.
+const pageArg = values.page === undefined ? undefined : /^\d+$/.test(values.page) ? Number(values.page) - 1 : values.page;
+const { diagram, warnings, pages, page } = parseDiagram(readFileSync(file, 'utf8'), file, { page: pageArg });
 for (const w of warnings) console.warn(`${file}:${w.line}: ${w.message}: ${w.text.trim()}`);
+/** The first page's layout is the sidecar's top level; other pages live under `pages` by key. */
+const pageKey = pages && page ? pages[page]!.key : undefined;
+if (pages) console.log(`page ${page! + 1} of ${pages.length}: ${pages[page!]!.name}`);
 
 const layoutPath = layoutPathFor(file);
 const before = existsSync(layoutPath) ? readFileSync(layoutPath, 'utf8') : '';
@@ -64,7 +72,8 @@ const mode: LayoutMode = values.reset ? 'reset' : values.relayout ? 'auto' : 'fi
 const require = createRequire(import.meta.url);
 const avoid = await loadAvoid(join(dirname(require.resolve('libavoid-js')), 'libavoid.wasm'));
 
-let layout = before ? parseLayout(before) : emptyLayout();
+const sidecar = before ? parseLayout(before) : emptyLayout();
+let layout = pageLayout(sidecar, pageKey);
 if (values.theme) {
   if (!(values.theme in THEMES)) throw new Error(`Unknown theme ${values.theme}; use ${Object.keys(THEMES).join(' or ')}`);
   layout = { ...layout, view: { ...layout.view, theme: values.theme } };
@@ -92,12 +101,12 @@ const scene = buildAnyScene(diagram, layout, avoid);
 
 if (values.to) writeConverted(values.to, file);
 else {
-  const out = values.out ?? file.replace(DIAGRAM_FILE, '') + '.svg';
+  const out = values.out ?? file.replace(DIAGRAM_FILE, '') + (pageKey ? `-${pageKey.replace(/[^\w.-]+/g, '_')}` : '') + '.svg';
   writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));
   console.log(`wrote ${out}`);
 }
 
-const after = serializeLayout(layout);
+const after = serializeLayout(withPageLayout(sidecar, pageKey, layout));
 if (!values['no-write'] && after !== before) {
   writeFileSync(layoutPath, after);
   console.log(`wrote ${layoutPath}`);

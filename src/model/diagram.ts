@@ -1,4 +1,4 @@
-import { parsePuml, type ParseResult } from './parse.ts';
+import { parsePuml, type ParseOptions, type ParseResult } from './parse.ts';
 import { looksLikeMermaid, parseMermaid } from './mermaid.ts';
 import { looksLikeDrawio, parseDrawio } from './drawio.ts';
 
@@ -9,9 +9,10 @@ import { looksLikeDrawio, parseDrawio } from './drawio.ts';
  * (`.mmd`/`.mermaid` vs `.puml`/`.plantuml`/`.pu`), and without a file name
  * a recognised Mermaid header line (`flowchart LR`, `sequenceDiagram`, ...)
  * does. PlantUML stays the default because it accepts files without tags.
+ * `options.page` picks a page of a multi-page draw.io file (other formats have one).
  */
-export function parseDiagram(source: string, fileName?: string): ParseResult {
-  if (looksLikeDrawio(source) || (fileName && /\.drawio(\.xml)?$/i.test(fileName))) return parseDrawio(source);
+export function parseDiagram(source: string, fileName?: string, options: ParseOptions = {}): ParseResult {
+  if (looksLikeDrawio(source) || (fileName && /\.drawio(\.xml)?$/i.test(fileName))) return parseDrawio(source, options);
   if (/^\s*@start/m.test(source)) return parsePuml(source);
   if (fileName && /\.(mmd|mermaid)$/i.test(fileName)) return parseMermaid(source);
   if (fileName && /\.(puml|plantuml|pu)$/i.test(fileName)) return parsePuml(source);

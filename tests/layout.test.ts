@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ensureLayout, shapesFor } from '../src/layout/auto.ts';
-import { emptyLayout, parseLayout, serializeLayout } from '../src/layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout } from '../src/layout/layout-file.ts';
 import { parsePuml } from '../src/model/parse.ts';
 import { nodeBox, overlaps } from '../src/scene/containers.ts';
 
@@ -33,6 +33,44 @@ describe('layout file', () => {
     const layout = parseLayout('{"nodes": {"a": {"x": 1}, "b": {"x": 1, "y": 2}}, "edges": {"e": {"via": [[1], [2, 3]]}}}');
     expect(layout.nodes).toEqual({ b: { x: 1, y: 2 } });
     expect(layout.edges).toEqual({ e: { via: [[2, 3]] } });
+  });
+
+  it('keeps other draw.io pages under "pages", page 1 at the top level', () => {
+    const text = serializeLayout({
+      version: 1,
+      nodes: { web: { x: 100, y: 110 } },
+      edges: {},
+      pages: { p3: { nodes: { n1: { x: 1, y: 2, pinned: true } }, edges: {} }, p2: { view: { theme: 'mono' }, nodes: {}, edges: { e: { via: [[3, 4]] } } } },
+    });
+    expect(text).toBe(
+      '{\n  "version": 1,\n  "nodes": {\n    "web": { "x": 100, "y": 110 }\n  },\n  "edges": {},\n  "pages": {\n' +
+        '    "p2": {\n      "view": { "theme": "mono" },\n      "nodes": {},\n      "edges": {\n        "e": { "via": [[3, 4]] }\n      }\n    },\n' +
+        '    "p3": {\n      "nodes": {\n        "n1": { "x": 1, "y": 2, "pinned": true }\n      },\n      "edges": {}\n    }\n  }\n}\n',
+    );
+    const back = parseLayout(text);
+    expect(serializeLayout(back)).toBe(text);
+    expect(pageLayout(back)).toEqual({ version: 1, nodes: { web: { x: 100, y: 110 } }, edges: {} });
+    expect(pageLayout(back, 'p3')).toEqual({ version: 1, nodes: { n1: { x: 1, y: 2, pinned: true } }, edges: {} });
+    expect(pageLayout(back, 'p9')).toEqual(emptyLayout());
+    // A sidecar without pages (every one written before pages existed) reads and writes as before.
+    const single = '{\n  "version": 1,\n  "nodes": {},\n  "edges": {}\n}\n';
+    expect(serializeLayout(parseLayout(single))).toBe(single);
+    expect(parseLayout(single).pages).toBeUndefined();
+  });
+
+  it('writes one page without touching the others; an emptied page drops out', () => {
+    const file = parseLayout('{"version": 1, "nodes": {"a": {"x": 1, "y": 1}}, "edges": {}, "pages": {"p2": {"nodes": {"b": {"x": 2, "y": 2}}, "edges": {}}}}');
+    const top = withPageLayout(file, undefined, { version: 1, nodes: { a: { x: 5, y: 5 } }, edges: {} });
+    expect(top.nodes).toEqual({ a: { x: 5, y: 5 } });
+    expect(top.pages).toEqual(file.pages);
+    const p3 = withPageLayout(file, 'p3', { version: 1, nodes: { c: { x: 3, y: 3 } }, edges: {} });
+    expect(Object.keys(p3.pages!)).toEqual(['p2', 'p3']);
+    expect(p3.nodes).toEqual(file.nodes);
+    const cleared = withPageLayout(file, 'p2', emptyLayout());
+    expect(cleared.pages).toBeUndefined();
+    expect(cleared.nodes).toEqual(file.nodes);
+    // A page layout handed in with stray pages of its own can't nest them.
+    expect(withPageLayout(file, 'p2', { ...emptyLayout(), nodes: { b: { x: 9, y: 9 } }, pages: { x: { nodes: {}, edges: {} } } }).pages).toEqual({ p2: { nodes: { b: { x: 9, y: 9 } }, edges: {} } });
   });
 });
 

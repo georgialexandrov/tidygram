@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { moveSelection, sidecarName, viaOf } from '../src/editor/edits.ts';
-import { addAll, boxFrom, clickSelect, groupByFolder, marqueeSelect } from '../src/editor/selection.ts';
+import { addAll, boxFrom, clickSelect, filterFiles, formatOf, groupByFolder, marqueeSelect } from '../src/editor/selection.ts';
 import type { LayoutFile } from '../src/layout/layout-file.ts';
 import { parsePuml } from '../src/model/parse.ts';
 
@@ -79,6 +79,17 @@ describe('selection', () => {
       { folder: 'fixtures', files: [{ path: 'fixtures/a.puml', name: 'a.puml' }, { path: 'fixtures/b.mmd', name: 'b.mmd' }] },
       { folder: '.', files: [{ path: 'top.puml', name: 'top.puml' }] },
     ]);
+  });
+
+  it('tells the format from the file name and filters the picker by path and format', () => {
+    expect(['a.puml', 'b.mmd', 'c.mermaid', 'd.drawio', 'e.drawio.xml', 'f.xml', 'g.pu'].map(formatOf)).toEqual(['plantuml', 'mermaid', 'mermaid', 'drawio', 'drawio', 'drawio', 'plantuml']);
+    const files = ['fixtures/class.puml', 'fixtures/mermaid/class.mmd', 'fixtures/drawio/er.drawio', 'fixtures/er.puml'];
+    expect(filterFiles(files, '')).toEqual(files);
+    expect(filterFiles(files, 'class')).toEqual(['fixtures/class.puml', 'fixtures/mermaid/class.mmd']);
+    expect(filterFiles(files, 'CLASS mermaid')).toEqual(['fixtures/mermaid/class.mmd']);
+    expect(filterFiles(files, 'er draw.io')).toEqual(['fixtures/drawio/er.drawio']);
+    expect(filterFiles(files, 'plantuml er')).toEqual(['fixtures/er.puml']);
+    expect(filterFiles(files, 'nothing')).toEqual([]);
   });
 
   it('names the exported sidecar like the server does', () => {

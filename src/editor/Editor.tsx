@@ -4,7 +4,7 @@ import { SourcePanel } from './SourcePanel.tsx';
 import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, hasSourceLayout, type LayoutMode } from '../layout/auto.ts';
-import { emptyLayout, parseLayout, serializeLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout, type LayoutFile, type Point } from '../layout/layout-file.ts';
 import { parseDiagram } from '../model/diagram.ts';
 import type { Diagram, ParseWarning } from '../model/types.ts';
 import { AnyContent, DiagramSvg, type Interaction } from '../render/DiagramSvg.tsx';
@@ -16,17 +16,23 @@ import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
 import { THEMES } from '../scene/theme.ts';
 import { fitToFrame } from '../layout/fit.ts';
 import { largestScale } from '../layout/scale.ts';
-import { convert, TARGET_EXTENSION, type ConvertTarget } from '../convert/index.ts';
+import { convert, formatOf as sourceFormatOf, TARGET_EXTENSION, type ConvertResult, type ConvertTarget } from '../convert/index.ts';
 
 const SIZES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 import { alignmentSnap, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
-import { addAll, boxFrom, clickSelect, groupByFolder, marqueeSelect } from './selection.ts';
+import { addAll, boxFrom, clickSelect, marqueeSelect } from './selection.ts';
+import { FilePicker } from './FilePicker.tsx';
 
 interface Doc {
   file: string;
   source: string;
   diagram: Diagram;
   warnings: ParseWarning[];
+  /** A recognised type with no layout model (`Pie`, `Salt (wireframe)`): shown as a panel, no sidecar. */
+  unsupported?: string;
+  /** Multi-page draw.io: every page, and the index of the one on screen. */
+  pages?: { key: string; name: string }[];
+  page?: number;
 }
 
 /** −/+ stepper; clicking the value resets to 100%. */
@@ -51,6 +57,98 @@ function Stepper({ label, value, onChange, title }: { label: string; value: numb
         </svg>
       </button>
     </span>
+  );
+}
+
+const TARGET_LABEL: Record<ConvertTarget, string> = { drawio: 'draw.io', puml: 'PlantUML', mermaid: 'Mermaid' };
+
+/** A refusal, short enough for the menu's hint column (the full text is the row's tooltip). */
+function shortReason(reason: string): string {
+  const drawio = /^(\w+) diagrams can't be converted to draw\.io yet/.exec(reason);
+  if (drawio) return `no ${drawio[1]!.toLowerCase()} in draw.io yet`;
+  const mermaid = /^Mermaid has no (\w+) diagrams/.exec(reason);
+  if (mermaid) return `no ${mermaid[1]} in Mermaid`;
+  return reason.split(/[;:]/)[0]!;
+}
+
+/**
+ * The losses of the conversion under the pointer, listed under the menu: what
+ * the target can't hold, before anything is written. Empty until a target is
+ * pointed at or focused.
+ */
+function ConvertLosses({ result, target }: { result?: ConvertResult; target: ConvertTarget | null }) {
+  if (!result || !target || !result.source) return null;
+  const shown = result.warnings.slice(0, 5);
+  return (
+    <div className="menu-detail" aria-live="polite">
+      {result.warnings.length ? (
+        <>
+          <span className="field-label">What {TARGET_LABEL[target]} can't hold</span>
+          <ul>
+            {shown.map((w, i) => (
+              <li key={i}>{w.message}</li>
+            ))}
+          </ul>
+          {result.warnings.length > shown.length && <span className="menu-more">+ {result.warnings.length - shown.length} more (in the tooltip)</span>}
+        </>
+      ) : (
+        <span className="menu-more">Nothing reported lost.</span>
+      )}
+    </div>
+  );
+}
+
+/** Nothing to arrange: a recognised-but-unsupported type, or a file without elements. */
+function isBlank(diagram: Diagram, unsupported?: string): boolean {
+  return !!unsupported || (!diagram.special && diagram.nodes.length === 0 && diagram.containers.length === 0);
+}
+
+function CloseGlyph() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M1 1l8 8M9 1 1 9" />
+    </svg>
+  );
+}
+
+/**
+ * What the canvas shows when there is nothing to arrange: a type we recognise
+ * but have no layout model for, or a file without elements. Says why and that
+ * nothing was written, instead of leaving an empty grid that looks broken.
+ */
+function BlankPanel({ doc, onWarnings }: { doc: Doc; onWarnings(): void }) {
+  const name = doc.file.split('/').pop();
+  return (
+    <div className="blank-panel" role="status" data-blank={doc.unsupported ? 'unsupported' : 'empty'}>
+      <span className="blank-glyph" aria-hidden="true" />
+      <h2>{doc.unsupported ? `${doc.unsupported} diagrams aren't supported yet` : 'Nothing to lay out'}</h2>
+      <p>
+        {doc.unsupported ? (
+          <>
+            <code>{name}</code> is recognised, but there is no layout model for this type, so there is nothing to arrange.
+          </>
+        ) : (
+          <>
+            No elements were found in <code>{name}</code>.{' '}
+            {doc.warnings.length > 0 && (
+              <>
+                {doc.warnings.length} line{doc.warnings.length > 1 ? 's were' : ' was'} not understood:{' '}
+                <button className="link" onClick={onWarnings}>
+                  show warnings
+                </button>
+                .
+              </>
+            )}
+          </>
+        )}
+      </p>
+      <p className="blank-note">The file is untouched and no layout.json was written. It reloads here as soon as it changes on disk.</p>
+      <p className="blank-supported">
+        <span className="field-label">Supported</span>
+        PlantUML: use case, component, deployment, class, object, ER, state, activity, sequence, timing, Gantt, C4, mindmap, WBS, JSON, YAML, Chen, ArchiMate,
+        nwdiag · Mermaid: flowchart, sequence, class, state, ER, Gantt, mindmap · draw.io
+      </p>
+    </div>
   );
 }
 
@@ -104,6 +202,8 @@ function descendants(diagram: Diagram, container: string): string[] {
 export function Editor({ avoid }: { avoid: Avoid }) {
   const [files, setFiles] = useState<string[]>([]);
   const [file, setFile] = useState<string | null>(() => new URLSearchParams(location.search).get('file'));
+  /** draw.io page id (`?page=`); undefined = the first page, whose layout is the sidecar's top level. */
+  const [page, setPage] = useState<string | undefined>(() => new URLSearchParams(location.search).get('page') ?? undefined);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [layout, setLayout] = useState<LayoutFile>(emptyLayout);
   const [error, setError] = useState<string | null>(null);
@@ -130,27 +230,57 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const redoStack = useRef<LayoutFile[]>([]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+  /**
+   * The whole sidecar as last read or written, other draw.io pages included.
+   * `layout` is only the page on screen; saving merges it back in here.
+   */
+  const sidecarRef = useRef<LayoutFile>(emptyLayout());
+  /** Sidecar key of the page on screen (undefined: the top level). Set by load, read by save. */
+  const pageKeyRef = useRef<string | undefined>(undefined);
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  /** The full sidecar with `next` as the current page: what is written, exported and shown in Source. */
+  const sidecarWith = useCallback((next: LayoutFile) => withPageLayout(sidecarRef.current, pageKeyRef.current, next), []);
   const fileRef = useRef(file);
   fileRef.current = file;
   const viewRef = useRef(view);
   viewRef.current = view;
   const saveTimer = useRef<number | undefined>(undefined);
   const needsFit = useRef(true);
+  /** True while the view is still the one Fit view chose: a window resize then refits instead of cropping. */
+  const autoFit = useRef(true);
 
-  const save = useCallback((next: LayoutFile) => {
-    const target = fileRef.current;
-    if (!target) return;
-    setStatus('saving');
+  /** The debounced write not yet sent. Opening another file or page sends it first (see `load`). */
+  const pendingSave = useRef<{ target: string; body: string } | null>(null);
+
+  const writePending = useCallback(async () => {
     window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/layout?file=${encodeURIComponent(target)}`, { method: 'PUT', body: serializeLayout(next) });
-        setStatus(res.ok ? 'saved' : 'error');
-      } catch {
-        setStatus('error');
-      }
-    }, 250);
+    const p = pendingSave.current;
+    if (!p) return;
+    pendingSave.current = null;
+    try {
+      const res = await fetch(`/api/layout?file=${encodeURIComponent(p.target)}`, { method: 'PUT', body: p.body });
+      setStatus(res.ok ? 'saved' : 'error');
+    } catch {
+      setStatus('error');
+    }
   }, []);
+
+  const save = useCallback(
+    (next: LayoutFile) => {
+      const target = fileRef.current;
+      if (!target) return;
+      setStatus('saving');
+      // Merge now, not when the timer fires: a page switch in between must not file this page under the next one.
+      const full = sidecarWith(next);
+      sidecarRef.current = full;
+      if (pendingSave.current && pendingSave.current.target !== target) void writePending();
+      pendingSave.current = { target, body: serializeLayout(full) };
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => void writePending(), 250);
+    },
+    [sidecarWith, writePending],
+  );
 
   /** Applies a finished edit: undoable, saved. */
   const commit = useCallback(
@@ -167,21 +297,35 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const load = useCallback(
     async (target: string, what: 'all' | 'source' | 'layout' = 'all') => {
       try {
+        // Each phase is timed so a slow open can be pinned on fetch, parse or ELK (`__perf.summary()`).
+        const t0 = performance.now();
+        // A page switch re-reads the sidecar: the last edit must be on disk first, or it would be read back stale.
+        await writePending();
         const res = await fetch(`/api/doc?file=${encodeURIComponent(target)}`);
         if (!res.ok) throw new Error((await res.json()).error ?? res.statusText);
         const body = (await res.json()) as { source: string; layout: string | null };
-        const parsed = parseDiagram(body.source, target);
+        const t1 = performance.now();
+        perf.record('open: fetch', t1 - t0);
+        const parsed = parseDiagram(body.source, target, { page: pageRef.current });
+        const t2 = performance.now();
+        perf.record('open: parse', t2 - t1);
+        // The first page lives at the sidecar's top level; others under `pages` by key.
+        const pageKey = parsed.pages && parsed.page ? parsed.pages[parsed.page]!.key : undefined;
         let base = layoutRef.current;
         if (what !== 'source') {
           try {
-            base = parseLayout(body.layout ?? '');
+            sidecarRef.current = parseLayout(body.layout ?? '');
           } catch {
             setError('layout.json is not valid JSON, ignoring it until it is fixed');
             return;
           }
+          base = pageLayout(sidecarRef.current, pageKey);
         }
+        pageKeyRef.current = pageKey;
         const next = await ensureLayout(parsed.diagram, base, 'fill');
+        perf.record(body.layout ? 'open: layout (sidecar)' : 'open: layout (first)', performance.now() - t2);
         if (what === 'all') {
+          perf.openedAt = t0;
           undoStack.current = [];
           redoStack.current = [];
           setSelNodes(new Set());
@@ -190,15 +334,16 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         } else {
           undoStack.current.push(layoutRef.current);
         }
-        setDoc({ file: target, source: body.source, diagram: parsed.diagram, warnings: parsed.warnings });
+        setDoc({ file: target, source: body.source, diagram: parsed.diagram, warnings: parsed.warnings, unsupported: parsed.unsupported, pages: parsed.pages, page: parsed.page });
         setLayout(next);
         setError(null);
-        if (serializeLayout(next) !== (body.layout ?? '')) save(next);
+        // Nothing to place, nothing to remember: a blank file gets no sidecar.
+        if (!isBlank(parsed.diagram, parsed.unsupported) && serializeLayout(sidecarWith(next)) !== (body.layout ?? '')) save(next);
       } catch (e) {
         setError(String(e));
       }
     },
-    [save],
+    [save, sidecarWith, writePending],
   );
 
   useEffect(() => {
@@ -215,9 +360,17 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     if (!file) return;
     const url = new URL(location.href);
     url.searchParams.set('file', file);
+    if (page === undefined) url.searchParams.delete('page');
+    else url.searchParams.set('page', page);
     history.replaceState(null, '', url);
     void load(file);
-  }, [file, load]);
+  }, [file, page, load]);
+
+  /** Another diagram starts on its first page. */
+  const pickFile = useCallback((next: string) => {
+    setPage(undefined);
+    setFile(next);
+  }, []);
 
   // Live reload when the .puml (or the layout) changes on disk.
   useEffect(() => {
@@ -248,6 +401,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   // Time from the input event to the DOM being updated, and to the next painted frame.
   useLayoutEffect(() => {
+    const opened = perf.openedAt;
+    if (opened !== undefined && scene) {
+      perf.openedAt = undefined;
+      perf.record('open: total', performance.now() - opened);
+    }
     const start = perf.inputAt;
     if (start === undefined) return;
     perf.inputAt = undefined;
@@ -257,6 +415,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
+  /** Nothing to arrange: an unsupported type, or a file without elements. The canvas shows a panel instead. */
+  const blank = !!doc && isBlank(doc.diagram, doc.unsupported);
+
   const frame = layout.view?.frame;
   const frameBox = useMemo(() => (scene && frame ? frameRect(scene.bounds, frame) : null), [scene, frame]);
 
@@ -267,6 +428,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     const b = frameBox ?? scene.bounds;
     const k = Math.min(2, (width - 80) / Math.max(b.w, 1), (height - 80) / Math.max(b.h, 1));
     setView({ k, x: (width - b.w * k) / 2 - b.x * k, y: (height - b.h * k) / 2 - b.y * k });
+    autoFit.current = true;
   }, [scene, frameBox]);
 
   useEffect(() => {
@@ -458,6 +620,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         const dy = e.clientY - d.client[1];
         if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
         d.moved = true;
+        autoFit.current = false;
         setView({ ...d.origin, x: d.origin.x + dx, y: d.origin.y + dy });
         break;
       }
@@ -513,6 +676,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      autoFit.current = false;
       const v = viewRef.current;
       if (e.ctrlKey || e.metaKey) {
         const rect = svg.getBoundingClientRect();
@@ -618,6 +782,22 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     return () => cancelAnimationFrame(id);
   }, [showSource]);
 
+  // Window resizes keep the diagram fitted until the user pans or zooms; after that the view is theirs.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    let frameId = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(() => autoFit.current && fitRef.current());
+    });
+    observer.observe(svg);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frameId);
+    };
+  }, []);
+
   /** Source lines of the selection: element declarations and the relations of a selected line. */
   const highlightedLines = useMemo(() => {
     const lines = new Set<number>();
@@ -686,8 +866,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   /** The sidecar exactly as the editor saves it, under the sidecar's own name. */
   const exportLayout = useCallback(() => {
     if (!doc) return;
-    download(new Blob([serializeLayout(layoutRef.current)], { type: 'application/json' }), sidecarName(doc.file));
-  }, [doc]);
+    download(new Blob([serializeLayout(sidecarWith(layoutRef.current))], { type: 'application/json' }), sidecarName(doc.file));
+  }, [doc, sidecarWith]);
 
   /**
    * The diagram in another format, as downloads: draw.io carries the layout
@@ -695,10 +875,34 @@ export function Editor({ avoid }: { avoid: Avoid }) {
    * `name-<format>` so a copy dropped next to the original never shares its
    * layout.json.
    */
+  /**
+   * Every conversion, run when the Export menu opens (a few ms each): the menu
+   * disables targets that can't hold the diagram, with the reason, and shows
+   * each target's losses before anything is downloaded.
+   */
+  const [conversions, setConversions] = useState<Record<ConvertTarget, ConvertResult> | null>(null);
+  const [convertFocus, setConvertFocus] = useState<ConvertTarget | null>(null);
+  const previewConversions = useCallback(
+    (open: boolean) => {
+      setConvertFocus(null);
+      if (!open || !doc || blank) return setConversions(null);
+      const all = {} as Record<ConvertTarget, ConvertResult>;
+      for (const target of ['drawio', 'puml', 'mermaid'] as const) {
+        try {
+          all[target] = convert(doc.diagram, layoutRef.current, target, scene ?? undefined);
+        } catch (e) {
+          all[target] = { source: '', layout: emptyLayout(), warnings: [{ line: 0, text: '', message: `Conversion failed: ${String(e)}` }], ids: { nodes: {}, edges: {} } };
+        }
+      }
+      setConversions(all);
+    },
+    [doc, blank, scene],
+  );
+
   const exportConverted = useCallback(
     (target: ConvertTarget) => {
       if (!doc) return;
-      const result = convert(doc.diagram, layoutRef.current, target, scene ?? undefined);
+      const result = conversions?.[target] ?? convert(doc.diagram, layoutRef.current, target, scene ?? undefined);
       if (!result.source) {
         setError(result.warnings.map((w) => w.message).join('; '));
         return;
@@ -709,20 +913,20 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       if (target !== 'drawio') window.setTimeout(() => download(new Blob([serializeLayout(result.layout)], { type: 'application/json' }), `${stem}.layout.json`), 300);
       if (result.warnings.length) {
         console.warn(result.warnings.map((w) => w.message).join('\n'));
-        flash(`Converted with ${result.warnings.length} approximation${result.warnings.length > 1 ? 's' : ''} (see console)`);
-      }
+        flash(`Converted with ${result.warnings.length} approximation${result.warnings.length > 1 ? 's' : ''}`);
+      } else flash(`Converted to ${TARGET_LABEL[target]}`);
     },
-    [doc, scene, baseName, flash],
+    [doc, scene, baseName, flash, conversions],
   );
 
   const copyLayout = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(serializeLayout(layoutRef.current));
+      await navigator.clipboard.writeText(serializeLayout(sidecarWith(layoutRef.current)));
       flash('Copied layout.json');
     } catch (e) {
       setError(`Copy failed: ${String(e)}`);
     }
-  }, [flash]);
+  }, [flash, sidecarWith]);
 
   const importInput = useRef<HTMLInputElement>(null);
   /** Replaces the layout with a file's, as one undoable step; elements it doesn't place are laid out. */
@@ -730,7 +934,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     async (picked: File | undefined) => {
       if (!picked || !doc) return;
       try {
-        const next = await ensureLayout(doc.diagram, parseLayout(await picked.text()), 'fill');
+        // A whole sidecar brings this page's entry if it has one; a single-page file is taken as this page.
+        const imported = parseLayout(await picked.text());
+        const key = pageKeyRef.current;
+        const next = await ensureLayout(doc.diagram, key && imported.pages?.[key] ? pageLayout(imported, key) : pageLayout(imported), 'fill');
         commit(next);
         needsFit.current = true;
         flash(`Imported ${picked.name}`);
@@ -758,6 +965,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         return;
       }
       if (e.key === 'Escape') {
+        setShowWarnings(false);
         setSelNodes(new Set());
         setSelEdge(undefined);
         return;
@@ -797,41 +1005,48 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const pinnedCount = doc ? doc.diagram.nodes.filter((n) => layout.nodes[n.id]?.pinned).length : 0;
   const staleCount = doc ? Object.keys(layout.nodes).filter((id) => !doc.diagram.nodes.some((n) => n.id === id)).length : 0;
   const big = 1e5;
-  const fileGroups = useMemo(() => groupByFolder(files), [files]);
   const spacing = layout.view?.spacing ?? [1, 1];
   // Dots closer than 12px read as a grey mesh: switch to a 5x coarser grid, then hide it.
   const gridStep = 20 * view.k >= 12 ? 20 : 100 * view.k >= 12 ? 100 : 0;
+  // Dots are a faint mix of the theme's ink into its paper, so dark themes don't get a field of bright pins.
+  const gridDot = scene ? `color-mix(in srgb, ${scene.theme.colors.text} 16%, ${scene.theme.colors.background})` : '#CFCBC2';
 
   return (
-    <div className="app">
+    // `data-loaded` names the file whose scene is on screen (`data-page` its draw.io page): the browser scripts wait on them (scripts/cdp.mjs open()).
+    <div className="app" data-loaded={doc?.file} data-page={doc?.pages?.[doc.page ?? 0]?.key}>
       <header className="toolbar">
         <div className="nameplate" aria-label="puml layout">
           <span className="nameplate-name">puml</span>
           <span className="nameplate-model">Layout</span>
         </div>
-        <select className="file-select" value={file ?? ''} onChange={(e) => setFile(e.target.value)} title={file ?? 'Diagram'} aria-label="Diagram">
-          {fileGroups.map((g) => (
-            <optgroup key={g.folder} label={g.folder}>
-              {g.files.map((f) => (
-                <option key={f.path} value={f.path} title={f.path}>
-                  {f.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <FilePicker files={files} file={file} onPick={pickFile} />
+        {doc?.pages && (
+          <select
+            className="page-select"
+            value={doc.pages[doc.page ?? 0]!.key}
+            onChange={(e) => setPage(e.target.selectedIndex === 0 ? undefined : e.target.value)}
+            title="draw.io page: each page has its own layout in layout.json"
+            aria-label="Page"
+          >
+            {doc.pages.map((p, i) => (
+              <option key={p.key} value={p.key}>
+                {i + 1}/{doc.pages!.length} · {p.name}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="sep" aria-hidden="true" />
         <div className="keys joined" role="group" aria-label="Layout">
-          <button onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
-            Auto layout
+          <button disabled={blank} onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
+            Auto<span className="wide-only"> layout</span>
           </button>
-          <button onClick={() => void runLayout('reset')} title={doc && hasSourceLayout(doc.diagram) ? "Discard the layout and go back to the file's" : 'Discard the layout and start over'}>
+          <button disabled={blank} onClick={() => void runLayout('reset')} title={doc && hasSourceLayout(doc.diagram) ? "Discard the layout and go back to the file's" : 'Discard the layout and start over'}>
             Reset
           </button>
-          <button disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
+          <button className="selection-key" disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
             Unpin
           </button>
-          <button disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
+          <button className="selection-key" disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
             Straighten
           </button>
         </div>
@@ -948,8 +1163,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               </label>
             </div>
           </Popover>
-          <button onClick={fit} title="Fit the diagram to the window (F)">
-            Fit view
+          <button className="fit-view" onClick={fit} title="Fit the diagram to the window (F)" aria-label="Fit view">
+            <span className="wide-only">Fit view</span>
+            <svg className="narrow-only" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" />
+            </svg>
           </button>
           <button className={`switch${showSource ? ' active' : ''}`} aria-pressed={showSource} onClick={() => toggleSource()} title="Show the source and layout.json (S)">
             <span className="lamp" aria-hidden="true" />
@@ -962,15 +1180,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               {busy}
             </span>
           )}
-          {doc && doc.warnings.length > 0 && (
-            <button className="warn" aria-expanded={showWarnings} onClick={() => setShowWarnings((s) => !s)}>
-              <svg className="glyph" width="12" height="11" viewBox="0 0 12 11" aria-hidden="true">
-                <path d="M6 0.5 11.5 10.5H0.5Z" />
-              </svg>
-              {doc.warnings.length}
-            </button>
-          )}
-          {doc && (
+          {doc && !blank && (
             <span className="meta" title={`${doc.diagram.nodes.length} elements, ${doc.diagram.edges.length} lines, ${pinnedCount} pinned${staleCount ? `, ${staleCount} stale ids in layout.json` : ''}`}>
               {selNodes.size > 1 && (
                 <span className="cell selected">
@@ -993,15 +1203,33 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               )}
             </span>
           )}
+        </div>
+        {/* Warnings and save state never shrink away with the readout: they are the lamps that matter. */}
+        <div className="lamps">
+          {doc && doc.warnings.length > 0 && (
+            <button className="warn" aria-expanded={showWarnings} onClick={() => setShowWarnings((s) => !s)}>
+              <svg className="glyph" width="12" height="11" viewBox="0 0 12 11" aria-hidden="true">
+                <path d="M6 0.5 11.5 10.5H0.5Z" />
+              </svg>
+              {doc.warnings.length}
+            </button>
+          )}
           <span className={`status ${status}`} role="status" title={status === 'saved' ? 'layout.json saved' : undefined}>
             {status === 'saving' ? 'saving' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}
           </span>
         </div>
         <div className="keys split" role="group" aria-label="Export">
-          <button className="primary" onClick={exportSvg} title="Download the laid-out diagram as SVG">
-            Export SVG
+          <button className="primary" disabled={blank} onClick={exportSvg} title="Download the laid-out diagram as SVG">
+            Export<span className="wide-only"> SVG</span>
           </button>
-          <Popover label={<span className="sr-only">More export</span>} title="More export: PNG, layout.json, convert to draw.io / PlantUML / Mermaid" className="export-menu" align="right">
+          <Popover
+            label={<span className="sr-only">More export</span>}
+            title="More export: PNG, layout.json, convert to draw.io / PlantUML / Mermaid"
+            className="export-menu"
+            align="right"
+            disabled={blank}
+            onOpenChange={previewConversions}
+          >
             {(close) => (
               <div className="menu" role="menu">
                 <button role="menuitem" onClick={() => (close(), exportSvg())}>
@@ -1021,15 +1249,42 @@ export function Editor({ avoid }: { avoid: Avoid }) {
                   Import layout JSON… <span className="hint">undoable</span>
                 </button>
                 <span className="menu-rule" aria-hidden="true" />
-                <button role="menuitem" data-action="convert-drawio" onClick={() => (close(), exportConverted('drawio'))}>
-                  Convert to draw.io <span className="hint">layout in file</span>
-                </button>
-                <button role="menuitem" data-action="convert-puml" onClick={() => (close(), exportConverted('puml'))}>
-                  Convert to PlantUML <span className="hint">+ layout.json</span>
-                </button>
-                <button role="menuitem" data-action="convert-mermaid" onClick={() => (close(), exportConverted('mermaid'))}>
-                  Convert to Mermaid <span className="hint">+ layout.json</span>
-                </button>
+                {(['drawio', 'puml', 'mermaid'] as const).map((target) => {
+                  const result = conversions?.[target];
+                  const reason = result && !result.source ? result.warnings.map((w) => w.message).join('; ') : undefined;
+                  const losses = result?.source ? result.warnings.length : 0;
+                  const same = doc && sourceFormatOf(doc.file, doc.source) === target;
+                  return (
+                    // A disabled button gets no hover events in every browser; the wrapper carries the reason's tooltip.
+                    <span key={target} className="menu-item-wrap" title={reason ?? (losses ? result!.warnings.map((w) => `≈ ${w.message}`).join('\n') : undefined)}>
+                      <button
+                        role="menuitem"
+                        data-action={`convert-${target}`}
+                        data-losses={losses}
+                        disabled={blank || !!reason}
+                        onClick={() => (close(), exportConverted(target))}
+                        onPointerEnter={() => setConvertFocus(target)}
+                        onFocus={() => setConvertFocus(target)}
+                      >
+                        <span>Convert to {TARGET_LABEL[target]}</span>
+                        <span className="hint">
+                          {reason ? (
+                            <span className="menu-reason">{shortReason(reason)}</span>
+                          ) : losses ? (
+                            <span className="menu-losses">
+                              <svg className="glyph" width="10" height="9" viewBox="0 0 12 11" aria-hidden="true">
+                                <path d="M6 0.5 11.5 10.5H0.5Z" />
+                              </svg>
+                              {losses}
+                            </span>
+                          ) : null}
+                          {!reason && (same ? 'same format' : target === 'drawio' ? 'layout in file' : '+ layout.json')}
+                        </span>
+                      </button>
+                    </span>
+                  );
+                })}
+                <ConvertLosses result={convertFocus ? conversions?.[convertFocus] : undefined} target={convertFocus} />
               </div>
             )}
           </Popover>
@@ -1082,17 +1337,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           <p className="keymap-note">Sequence, Gantt and timing select one element; drag on empty canvas pans.</p>
         </Popover>
       </header>
-      {error && <div className="error">{error}</div>}
-      {showWarnings && doc && (
-        <div className="warnings">
-          {doc.warnings.map((w, i) => (
-            <div key={i}>
-              line {w.line}: {w.message} <code>{w.text.trim()}</code>
-            </div>
-          ))}
-        </div>
-      )}
       <div className="workspace">
+        <div className="stage">
         <svg
           ref={svgRef}
           className={`canvas${panning ? ' panning' : ''}${multi ? ' marquee-mode' : ''}`}
@@ -1104,7 +1350,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         >
           <defs>
             <pattern id="grid" width={gridStep * view.k} height={gridStep * view.k} x={view.x} y={view.y} patternUnits="userSpaceOnUse">
-              <circle cx={1} cy={1} r={1} fill="#CFCBC2" />
+              <circle cx={1} cy={1} r={1} style={{ fill: gridDot }} />
             </pattern>
           </defs>
           {grid && gridStep > 0 && <rect width="100%" height="100%" fill="url(#grid)" />}
@@ -1129,11 +1375,48 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             {marquee && <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" />}
           </g>
         </svg>
+        {doc && blank && <BlankPanel doc={doc} onWarnings={() => setShowWarnings(true)} />}
+        {/* Messages float over the canvas rather than push it down, so opening them never moves the diagram. */}
+        <div className="notices">
+          {error && (
+            <div className="error" role="alert">
+              <span>{error}</span>
+              <button className="notice-close" onClick={() => setError(null)} aria-label="Dismiss">
+                <CloseGlyph />
+              </button>
+            </div>
+          )}
+          {showWarnings && doc && doc.warnings.length > 0 && (
+            <div className="warnings" role="region" aria-label="Warnings">
+              <div className="warnings-head">
+                <span className="field-label">
+                  {doc.warnings.length} warning{doc.warnings.length > 1 ? 's' : ''}
+                </span>
+                <span className="warnings-note">lines that were skipped or approximated; the file is never changed</span>
+                <button className="notice-close" onClick={() => setShowWarnings(false)} aria-label="Close warnings">
+                  <CloseGlyph />
+                </button>
+              </div>
+              <ol className="warnings-list">
+                {doc.warnings.map((w, i) => (
+                  <li key={i}>
+                    <span className="warnings-line">{w.line > 0 ? `line ${w.line}` : ''}</span>
+                    <span>
+                      {w.message}
+                      {w.text.trim() && <code>{w.text.trim()}</code>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+        </div>
         {showSource && doc && (
           <SourcePanel
             file={doc.file}
             source={doc.source}
-            layoutJson={serializeLayout(layout)}
+            layoutJson={serializeLayout(sidecarWith(layout))}
             highlighted={highlightedLines}
             onLineClick={selectLine}
             onClose={() => toggleSource(false)}

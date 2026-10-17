@@ -59,7 +59,7 @@ export function parseMermaid(source: string): ParseResult {
   if (!header) return empty('description', [{ line: 1, text: '', message: 'No Mermaid diagram type found' }]);
   const kw = header.text.split(/[\s;]/)[0]!.toLowerCase();
   const body = lines.slice(1);
-  if (UNSUPPORTED[kw]) return empty('description', [{ line: header.no, text: header.raw, message: `${UNSUPPORTED[kw]} diagrams are not supported yet` }]);
+  if (UNSUPPORTED[kw]) return { ...empty('description', [{ line: header.no, text: header.raw, message: `${UNSUPPORTED[kw]} diagrams are not supported yet` }]), unsupported: UNSUPPORTED[kw] };
   switch (kw) {
     case 'flowchart':
     case 'graph':

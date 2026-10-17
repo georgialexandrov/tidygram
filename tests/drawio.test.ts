@@ -32,7 +32,7 @@ describe('draw.io fixtures', () => {
   const expected: Record<string, { nodes: number; containers: number; edges: number; warnings: number }> = {
     flowchart: { nodes: 13, containers: 3, edges: 12, warnings: 0 },
     compressed: { nodes: 13, containers: 3, edges: 12, warnings: 0 },
-    pages: { nodes: 3, containers: 0, edges: 2, warnings: 1 },
+    pages: { nodes: 3, containers: 0, edges: 2, warnings: 0 },
     er: { nodes: 5, containers: 0, edges: 4, warnings: 0 },
     objects: { nodes: 10, containers: 0, edges: 9, warnings: 2 },
   };
@@ -58,11 +58,43 @@ describe('draw.io fixtures', () => {
     expect(new Set(packed.diagram.nodes.map((n) => n.line))).toEqual(new Set([2]));
   });
 
-  it('reads only the first page and names the others', () => {
-    const { diagram, warnings } = parse('pages');
+  it('reads the first page by default and lists every page', () => {
+    const { diagram, pages, page, warnings } = parse('pages');
     expect(diagram.nodes.map((n) => n.id)).toEqual(['web', 'api', 'db']);
-    expect(warnings[0]!.message).toContain('"Overview"');
-    expect(warnings[0]!.message).toContain('"Details", "Notes"');
+    expect(pages).toEqual([
+      { key: 'p1', name: 'Overview' },
+      { key: 'p2', name: 'Details' },
+      { key: 'p3', name: 'Notes' },
+    ]);
+    expect(page).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it('reads page N by index, id or name, including compressed pages', () => {
+    const text = source('pages');
+    const byIndex = parseDiagram(text, 'pages.drawio', { page: 2 });
+    expect(byIndex.page).toBe(2);
+    expect(byIndex.diagram.nodes.map((n) => n.id)).toEqual(['n1']);
+    expect(parseDiagram(text, 'pages.drawio', { page: 'p3' }).diagram.nodes.map((n) => n.id)).toEqual(['n1']);
+    expect(parseDiagram(text, 'pages.drawio', { page: 'Notes' }).page).toBe(2);
+    // Page 2 is stored compressed.
+    const details = parseDiagram(text, 'pages.drawio', { page: 'p2' });
+    expect(details.page).toBe(1);
+    expect(details.diagram.nodes.length).toBeGreaterThan(0);
+    expect(details.warnings).toEqual([]);
+  });
+
+  it('falls back to the first page, with a warning, when the page is not there', () => {
+    const missing = parseDiagram(source('pages'), 'pages.drawio', { page: 'gone' });
+    expect(missing.page).toBe(0);
+    expect(missing.diagram.nodes.map((n) => n.id)).toEqual(['web', 'api', 'db']);
+    expect(missing.warnings[0]!.message).toContain('No page "gone"');
+    expect(parseDiagram(source('pages'), 'pages.drawio', { page: 7 }).page).toBe(0);
+  });
+
+  it('leaves single-page files without a page list', () => {
+    expect(parse('flowchart').pages).toBeUndefined();
+    expect(parse('flowchart').page).toBeUndefined();
   });
 });
 

@@ -1,6 +1,18 @@
 /**
  * The sidecar: `diagram.layout.json` next to `diagram.puml`, keyed by the
  * element ids from the PlantUML source. Positions are node centres.
+ *
+ * Multi-page draw.io files: the first page's layout is the top level, exactly
+ * like a single-page file (so sidecars written before pages existed, and
+ * every PlantUML/Mermaid sidecar, stay valid). Every other page gets its own
+ * `view`/`nodes`/`edges` under `pages`, keyed by the draw.io page id, which
+ * survives renaming the page:
+ *
+ *     { "version": 1, "nodes": { ... }, "edges": { ... },
+ *       "pages": { "p2": { "view": { ... }, "nodes": { ... }, "edges": { ... } } } }
+ *
+ * Use `pageLayout` / `withPageLayout` to read and write one page; the rest of
+ * the code only ever sees a single page's `LayoutFile`.
  */
 
 export type Point = [number, number];
@@ -39,10 +51,43 @@ export interface LayoutFile {
   view?: ViewSettings;
   nodes: Record<string, NodeLayout>;
   edges: Record<string, EdgeLayout>;
+  /** Layouts of the other pages of a multi-page draw.io file, by page id. Absent otherwise. */
+  pages?: Record<string, PageLayout>;
+}
+
+/** One non-first page's layout: a `LayoutFile` without the version or further pages. */
+export interface PageLayout {
+  view?: ViewSettings;
+  nodes: Record<string, NodeLayout>;
+  edges: Record<string, EdgeLayout>;
 }
 
 export function emptyLayout(): LayoutFile {
   return { version: 1, nodes: {}, edges: {} };
+}
+
+/**
+ * The layout of one page. `page` is the page's key (`ParseResult.pages[i].key`);
+ * undefined, or the first page's key, means the top level.
+ */
+export function pageLayout(file: LayoutFile, page?: string): LayoutFile {
+  if (page === undefined) {
+    const { pages: _pages, ...top } = file;
+    return top;
+  }
+  const entry = file.pages?.[page];
+  return entry ? { version: 1, ...entry } : emptyLayout();
+}
+
+/** The whole sidecar with one page's layout replaced; an emptied page drops out of `pages`. */
+export function withPageLayout(file: LayoutFile, page: string | undefined, layout: LayoutFile): LayoutFile {
+  const { version: _version, pages: _pages, ...entry } = layout;
+  if (page === undefined) return file.pages ? { ...entry, version: 1, pages: file.pages } : { ...entry, version: 1 };
+  const pages = { ...file.pages };
+  if (entry.view || Object.keys(entry.nodes).length || Object.keys(entry.edges).length) pages[page] = entry;
+  else delete pages[page];
+  const { pages: _old, ...top } = file;
+  return Object.keys(pages).length ? { ...top, pages } : top;
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
@@ -56,7 +101,21 @@ const point = (v: unknown): Point | undefined => {
 /** Tolerant reader: drops malformed entries instead of rejecting the file, since agents edit it too. */
 export function parseLayout(text: string): LayoutFile {
   if (!text.trim()) return emptyLayout();
-  const raw = JSON.parse(text) as { nodes?: unknown; edges?: unknown; view?: Record<string, unknown> };
+  const raw = JSON.parse(text) as Record<string, unknown>;
+  const layout = readPage(raw);
+  if (raw.pages && typeof raw.pages === 'object') {
+    const pages: Record<string, PageLayout> = {};
+    for (const [key, value] of Object.entries(raw.pages as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object') continue;
+      const { version: _version, ...page } = readPage(value as Record<string, unknown>);
+      pages[key] = page;
+    }
+    if (Object.keys(pages).length) layout.pages = pages;
+  }
+  return layout;
+}
+
+function readPage(raw: { nodes?: unknown; edges?: unknown; view?: Record<string, unknown> }): LayoutFile {
   const layout = emptyLayout();
   if (raw.view && typeof raw.view === 'object') {
     const view: ViewSettings = {};
@@ -99,22 +158,29 @@ export function parseLayout(text: string): LayoutFile {
 const r = (v: number) => Math.round(v);
 const sortedKeys = (o: object) => Object.keys(o).sort((a, b) => a.localeCompare(b));
 
-/** One entry per line, sorted keys, integer coordinates: small, stable diffs. */
+/** One entry per line, sorted keys, integer coordinates: small, stable diffs. Other pages follow, indented one level. */
 export function serializeLayout(layout: LayoutFile): string {
+  const pages = layout.pages ? sortedKeys(layout.pages).map((key) => `    ${JSON.stringify(key)}: {\n${pageBody(layout.pages![key]!, '      ')}\n    }`) : [];
+  const tail = pages.length ? `,\n  "pages": {\n${pages.join(',\n')}\n  }` : '';
+  return `{\n  "version": 1,\n${pageBody(layout, '  ')}${tail}\n}\n`;
+}
+
+/** `view`, `nodes` and `edges` of one page at the given indent, without the closing newline. */
+function pageBody(layout: PageLayout, pad: string): string {
   const nodeLines = sortedKeys(layout.nodes).map((id) => {
     const n = layout.nodes[id]!;
     const parts = [`"x": ${r(n.x)}`, `"y": ${r(n.y)}`];
     if (n.pinned) parts.push('"pinned": true');
-    return `    ${JSON.stringify(id)}: { ${parts.join(', ')} }`;
+    return `${pad}  ${JSON.stringify(id)}: { ${parts.join(', ')} }`;
   });
   const edgeLines = sortedKeys(layout.edges).flatMap((id) => {
     const e = layout.edges[id]!;
     const parts: string[] = [];
     if (e.via?.length) parts.push(`"via": [${e.via.map(([x, y]) => `[${r(x)}, ${r(y)}]`).join(', ')}]`);
     if (e.label) parts.push(`"label": [${r(e.label[0])}, ${r(e.label[1])}]`);
-    return parts.length ? [`    ${JSON.stringify(id)}: { ${parts.join(', ')} }`] : [];
+    return parts.length ? [`${pad}  ${JSON.stringify(id)}: { ${parts.join(', ')} }`] : [];
   });
-  const block = (lines: string[]) => (lines.length ? `{\n${lines.join(',\n')}\n  }` : '{}');
+  const block = (lines: string[]) => (lines.length ? `{\n${lines.join(',\n')}\n${pad}}` : '{}');
   const viewParts: string[] = [];
   if (layout.view?.theme) viewParts.push(`"theme": ${JSON.stringify(layout.view.theme)}`);
   if (layout.view?.frame) viewParts.push(`"frame": [${layout.view.frame[0]}, ${layout.view.frame[1]}]`);
@@ -122,6 +188,6 @@ export function serializeLayout(layout: LayoutFile): string {
   if (layout.view?.text && layout.view.text !== 1) viewParts.push(`"text": ${Math.round(layout.view.text * 100) / 100}`);
   if (layout.view?.icons && layout.view.icons !== 1) viewParts.push(`"icons": ${Math.round(layout.view.icons * 100) / 100}`);
   if (layout.view?.spacing) viewParts.push(`"spacing": [${layout.view.spacing.map((v) => Math.round(v * 100) / 100).join(', ')}]`);
-  const view = viewParts.length ? `  "view": { ${viewParts.join(', ')} },\n` : '';
-  return `{\n  "version": 1,\n${view}  "nodes": ${block(nodeLines)},\n  "edges": ${block(edgeLines)}\n}\n`;
+  const view = viewParts.length ? `${pad}"view": { ${viewParts.join(', ')} },\n` : '';
+  return `${view}${pad}"nodes": ${block(nodeLines)},\n${pad}"edges": ${block(edgeLines)}`;
 }

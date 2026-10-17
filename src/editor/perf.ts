@@ -6,6 +6,8 @@ const samples: Record<string, number[]> = {};
 
 export const perf = {
   inputAt: undefined as number | undefined,
+  /** Set when a file starts loading; the first committed scene records `open: total`. */
+  openedAt: undefined as number | undefined,
   record(name: string, ms: number) {
     const list = (samples[name] ??= []);
     list.push(ms);

@@ -44,16 +44,28 @@ export async function withChrome(port, fn) {
       for (let i = 1; i <= steps; i++) await mouse('mouseMoved', from[0] + ((to[0] - from[0]) * i) / steps, from[1] + ((to[1] - from[1]) * i) / steps, 1, modifiers);
       await mouse('mouseReleased', to[0], to[1], 0, modifiers);
     };
+    /**
+     * Navigates and waits for the editor's ready signal: `.app[data-loaded]` names the file once its
+     * scene (or the "not supported" panel) is committed. Compares the decoded `file` param; the
+     * editor's URL may encode `/` either way. Returns the ms from navigate to ready.
+     */
     const open = async (url) => {
+      const t0 = Date.now();
       await send('Page.navigate', { url });
       const file = new URL(url).searchParams.get('file') ?? '';
-      // Wait for the new page (not the old DOM) to have drawn something.
-      for (let i = 0; i < 150; i++) {
-        await sleep(100);
-        const ready = await evaluate(`location.href.includes(${JSON.stringify(encodeURIComponent(file).replace(/%2F/g, '/'))}) && document.querySelector('.toolbar select')?.value === ${JSON.stringify(file)} && document.querySelectorAll('[data-id], [data-edge]').length > 0`).catch(() => false);
-        if (ready) break;
+      let ready = false;
+      for (let i = 0; i < 300 && !ready; i++) {
+        await sleep(50);
+        ready = await evaluate(`new URLSearchParams(location.search).get('file') === ${JSON.stringify(file)} && document.querySelector('.app')?.dataset.loaded === ${JSON.stringify(file)}`).catch(() => false);
       }
-      await sleep(400);
+      if (!ready) {
+        const seen = await evaluate(`JSON.stringify({ href: location.href, loaded: document.querySelector('.app')?.dataset.loaded, error: document.querySelector('.error')?.textContent })`).catch((e) => String(e));
+        throw new Error(`open: ${file} did not load within 15 s (${seen}; console: ${errors.join(' | ') || 'none'})`);
+      }
+      const ms = Date.now() - t0;
+      // Two frames: the fit-on-open effect has run and painted.
+      await evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+      return ms;
     };
     const centreOf = (selector) => evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r && [r.x + r.width / 2, r.y + r.height / 2]; })()`);
     const screenshot = async () => Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64');

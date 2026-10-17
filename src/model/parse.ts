@@ -35,6 +35,24 @@ import { parseAtom, parseNameSpec, splitArgs, stripDecorations, unescape, unquot
 export interface ParseResult {
   diagram: Diagram;
   warnings: ParseWarning[];
+  /**
+   * Set when the file is a diagram type we recognise but have no layout model
+   * for (`Salt (wireframe)`, `Pie`, ...): the editor shows a panel saying so
+   * instead of an empty canvas, and writes no sidecar.
+   */
+  unsupported?: string;
+  /**
+   * Multi-page draw.io files only: every page in file order (`key` is the page
+   * id, which keys its layout in the sidecar's `pages`; `name` is what draw.io
+   * shows on the tab), and the index of the page that was parsed.
+   */
+  pages?: { key: string; name: string }[];
+  page?: number;
+}
+
+/** Which page of a multi-page file to read: a 0-based index, or a page id or name. Default: the first. */
+export interface ParseOptions {
+  page?: number | string;
 }
 
 /** Diagram types that need a different layout model; recognised so we can say so. */
@@ -263,7 +281,7 @@ export function parsePuml(source: string): ParseResult {
   if (startTag === 'startnwdiag') return parseNwdiag(lines);
   if (UNSUPPORTED_TAGS[startTag]) {
     warnings.push({ line: 1, text: '', message: `${UNSUPPORTED_TAGS[startTag]} diagrams are not supported yet` });
-    return empty('description');
+    return { ...empty('description'), unsupported: UNSUPPORTED_TAGS[startTag] };
   }
   if (startTag === 'startmindmap' || startTag === 'startwbs') return parseTree(lines, startTag === 'startwbs' ? 'wbs' : 'mindmap');
 
@@ -273,7 +291,7 @@ export function parsePuml(source: string): ParseResult {
   if (typeof detected !== 'string' && detected.unsupported === 'Timing') return parseTiming(lines);
   if (typeof detected !== 'string') {
     warnings.push({ line: 1, text: '', message: `${detected.unsupported} diagrams are not supported yet` });
-    return empty('description');
+    return { ...empty('description'), unsupported: detected.unsupported };
   }
   const family = detected;
 
