@@ -10,7 +10,7 @@ it, `diagram.layout.json`: positions, bends, theme and frame, keyed by the
 element ids. When the author edits the source, your layout survives and
 new elements land next to what they connect to.
 
-[![tidygram in 34 seconds: click for the narrated video](docs/media/demo.gif)](docs/media/tidygram.mp4)
+https://github.com/user-attachments/assets/1f135aae-d905-429e-a297-08e117c73dc1
 
 **Try it in your browser:** <https://georgi.alexandrov.dev/tidygram/> (open a
 file or drop it on the page; nothing is uploaded).
