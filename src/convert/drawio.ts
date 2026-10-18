@@ -1,5 +1,5 @@
 import type { LayoutFile, Point } from '../layout/layout-file.ts';
-import { parseDrawio } from '../model/drawio.ts';
+import { APPROX_KINDS, parseDrawio } from '../model/drawio.ts';
 import type { ArrowHead, ClassKind, DNode, Diagram, NodeKind, ParseWarning } from '../model/types.ts';
 import type { AnyScene } from '../scene/any.ts';
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
@@ -344,7 +344,7 @@ const CLASS_KIND_LINE: Partial<Record<ClassKind, string>> = {
  * the name, `[technology]` and description lines under it, both smaller.
  * draw.io keeps unknown style keys, so `pumlHead`/`pumlTail` (how many
  * lines aren't the name), `pumlStereotype`, `pumlTechnology` and
- * `pumlClassKind` let `parseDrawio` take the label apart again.
+ * `pumlClassKind`, `pumlKind` (the real kind behind an approximate shape) and `pumlExternal` let `parseDrawio` take the label apart again.
  */
 export function foldLabel(n: DNode, kindLine?: string): { value: string; style: string } {
   const small = (t: string) => `<font style="font-size:10px">${html(t)}</font>`;
@@ -358,6 +358,8 @@ export function foldLabel(n: DNode, kindLine?: string): { value: string; style: 
   if (tail.length) style += `pumlTail=${tail.length};`;
   if (stereotype) style += `pumlStereotype=${enc(stereotype)};`;
   if (n.technology) style += `pumlTechnology=${enc(n.technology)};`;
+  if (APPROX_KINDS.has(n.kind)) style += `pumlKind=${n.kind};`;
+  if (n.external) style += 'pumlExternal=1;';
   if (n.kind === 'class' && n.classKind && n.classKind !== 'entity') style += `pumlClassKind=${n.classKind};`;
   return { value: [...head.map(small), html(n.label), ...tail.map(small)].join('<br>'), style };
 }
