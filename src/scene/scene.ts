@@ -14,7 +14,7 @@ import { ROUTING, routeEdges, type RouteShape } from './route.ts';
 /** A container wall for the router: how far it reaches outside and inside the border (see `wallsFor`). */
 const WALL = { outer: 7, inner: 8, top: 3 };
 import { themeOf, type Theme } from './theme.ts';
-import { buildTemplateScene, type TemplateScene } from './template.ts';
+import { buildTemplateScene, nudgeRingTitles, type TemplateScene } from './template.ts';
 
 export interface SceneNode {
   node: DNode;
@@ -466,7 +466,10 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const y0 = Math.min(...all.map((b) => b.y));
   const x1 = Math.max(...all.map((b) => b.x + b.w));
   const y1 = Math.max(...all.map((b) => b.y + b.h));
-  return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, template };
+  // Ring titles step aside for lines and labels (the backdrop itself is derived from the members alone).
+  const label = (e: SceneEdge): Box[] => (e.label ? [{ x: e.label.x - e.label.text.width / 2 - 4 * theme.scale, y: e.label.y - e.label.text.height / 2 - 2 * theme.scale, w: e.label.text.width + 8 * theme.scale, h: e.label.text.height + 4 * theme.scale }] : []);
+  const shown = template?.kind === 'clean' ? nudgeRingTitles(template, edges.map((e) => e.points), [...nodes.map((n) => n.box), ...edges.flatMap(label)], theme) : template;
+  return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, template: shown };
 }
 
 /**

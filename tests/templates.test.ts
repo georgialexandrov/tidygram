@@ -18,7 +18,7 @@ import { DiagramSvg } from '../src/render/DiagramSvg.tsx';
 import { loadAvoid, type Avoid } from '../src/scene/avoid.ts';
 import { overlaps, type Box } from '../src/scene/containers.ts';
 import { buildScene, type Scene } from '../src/scene/scene.ts';
-import { boxOutline, cornerDistance, hexEdgeX, insideHex, RING_ASPECT, ringRadiusAt, ringStretch, squeezed } from '../src/scene/template.ts';
+import { clearOfRing, hexEdgeX, insideHex, insideRing, nudgeRingTitles, ringArea, ringGauge, ringPoint, RING_ROUND, ringShape, templateMetrics, type RingShape } from '../src/scene/template.ts';
 import { THEMES } from '../src/scene/theme.ts';
 
 const require = createRequire(import.meta.url);
@@ -307,11 +307,9 @@ describe('template geometry', () => {
       const c = t.center!;
       for (const n of scene.nodes) {
         const ring = t.rings.find((r) => r.id === t.assigned.get(n.node.id))!;
-        expect(cornerDistance(n.box, c), n.node.id).toBeLessThan(ring.r);
-        // The nearest point of the box to the centre lies beyond the inner ring.
-        const nx = Math.max(n.box.x, Math.min(c[0], n.box.x + n.box.w));
-        const ny = Math.max(n.box.y, Math.min(c[1], n.box.y + n.box.h));
-        expect(Math.hypot((nx - c[0]) / RING_ASPECT, ny - c[1]), n.node.id).toBeGreaterThanOrEqual(ring.inner - 0.5);
+        for (const [x, y] of corners(n.box)) expect(insideRing(ring, x - c[0], y - c[1]), n.node.id).toBe(true);
+        // The nearest point of the box to the centre lies beyond the ring inside.
+        if (ring.inner.a > 0) expect(clearOfRing(n.box, c, ring.inner, 0), n.node.id).toBe(true);
       }
       noOverlaps(scene);
     }
@@ -325,20 +323,81 @@ describe('template geometry', () => {
       const pad = 20 * scene.theme.scale;
       for (const n of scene.nodes) {
         const ring = t.rings.find((r) => r.id === t.assigned.get(n.node.id))!;
-        for (const [x, y] of boxOutline(n.box, c, 16)) {
-          const [th, rho] = squeezed(x, y);
-          expect(rho, `${n.node.id} inside its ring`).toBeLessThanOrEqual(ringRadiusAt(ring.profile, th) - pad / ringStretch(th) + 0.5);
-          expect(rho, `${n.node.id} outside the ring within`).toBeGreaterThanOrEqual(ringRadiusAt(ring.innerProfile, th) + (ring.inner > 0 ? pad / ringStretch(th) : 0) - 2);
+        const grown = { x: n.box.x - pad, y: n.box.y - pad, w: n.box.w + pad * 2, h: n.box.h + pad * 2 };
+        for (const [x, y] of corners(grown)) expect(insideRing(ring, x - c[0], y - c[1], 0.5), `${n.node.id} inside its ring`).toBe(true);
+        if (ring.inner.a > 0) expect(clearOfRing(n.box, c, ring.inner, pad - 1), `${n.node.id} outside the ring within`).toBe(true);
+      }
+      // Rings nest, each a band's thickness beyond the one inside, and share the centre by construction.
+      const band = templateMetrics(scene.theme).empty;
+      for (const r of t.rings) {
+        for (let i = 0; i < 40; i++) {
+          const [x, y] = ringPoint(ringShape(r.inner.a, r.inner.b), i / 40);
+          if (r.inner.a > 0) expect(insideRing(r, x, y, -band + 1), `${r.id} holds the ring inside, a band away`).toBe(true);
         }
       }
-      // Rings nest: each outline lies beyond the one inside it.
-      for (const r of t.rings) r.profile.forEach((rho, s) => expect(rho).toBeGreaterThan(r.innerProfile[s]!));
       noOverlaps(scene);
     }
     // Rings used to be even circles round the members: 1791 × 995 for this diagram at the default size.
     const diagram = CLEAN();
     const b = sceneOf(diagram, applyTemplate(diagram, emptyLayout(), 'clean')).template!.bounds;
     expect(b.w * b.h).toBeLessThan(0.8 * 1791 * 995);
+  });
+
+  it('clean: every ring is convex and symmetric about both axes through the centre', () => {
+    for (const diagram of [CLEAN(), HEX(), LAYERED()]) {
+      const t = sceneOf(diagram, applyTemplate(diagram, emptyLayout(), 'clean')).template!;
+      for (const r of t.rings) {
+        expect(r.c).toBeCloseTo(RING_ROUND * Math.min(r.a, r.b), 6);
+        const pts = Array.from({ length: 96 }, (_, i) => ringPoint(r, i / 96));
+        for (const [x, y] of pts) {
+          expect(insideRing(r, x, y, 1e-6), 'on the outline').toBe(true);
+          expect(insideRing(r, -x, y, 1e-6), 'mirrored left-right').toBe(true);
+          expect(insideRing(r, x, -y, 1e-6), 'mirrored up-down').toBe(true);
+        }
+        // Convex: the midpoint of any two outline points is inside; the outline's mirror image lies on it too.
+        for (let i = 0; i < pts.length; i += 3)
+          for (let j = i + 1; j < pts.length; j += 5) expect(insideRing(r, (pts[i]![0] + pts[j]![0]) / 2, (pts[i]![1] + pts[j]![1]) / 2)).toBe(true);
+        // The sampled outline is centred on the centre and spans the ring's own width and height.
+        const xs = pts.map((p) => p[0]);
+        const ys = pts.map((p) => p[1]);
+        expect(Math.max(...xs) + Math.min(...xs)).toBeCloseTo(0, 3);
+        expect(Math.max(...ys) + Math.min(...ys)).toBeCloseTo(0, 3);
+        expect(Math.max(...xs)).toBeCloseTo(r.a, 3);
+        expect(Math.max(...ys)).toBeCloseTo(r.b, 3);
+      }
+    }
+  });
+
+  it('clean: the closed-form gauge matches a search, and a ring is the smallest of its proportions', () => {
+    for (const [u, v, r] of [[300, 40, 1.8], [100, 90, 1.5], [250, 120, 2.4], [20, 200, 1.2], [0, 80, 3], [150, 150, 1]] as const) {
+      const b = ringGauge(u, v, r);
+      expect(insideRing(ringShape(r * b, b), u, v, 1e-3)).toBe(true);
+      expect(insideRing(ringShape(r * b * 0.995, b * 0.995), u, v)).toBe(false);
+    }
+    const s: RingShape = ringShape(200, 100);
+    expect(ringArea(s)).toBeLessThan(4 * 200 * 100);
+  });
+
+  it('clean: a ring title slides along the ring top off a line, and stays when nothing is in the way', () => {
+    const d = CLEAN();
+    const scene = sceneOf(d, applyTemplate(d, emptyLayout(), 'clean'));
+    const t = scene.template!;
+    const theme = scene.theme;
+    const top = t.rings.at(-1)!;
+    expect(nudgeRingTitles(t, [], [], theme).rings.map((r) => r.title.x)).toEqual(t.rings.map((r) => r.title.x));
+    // A vertical line through the outer title.
+    const line: [number, number][] = [[top.title.x, top.title.y - 40], [top.title.x, top.title.y + 60]];
+    const moved = nudgeRingTitles(t, [line], [], theme).rings.at(-1)!;
+    expect(Math.abs(moved.title.x - top.title.x)).toBeGreaterThan(top.title.text.width / 2);
+    expect(moved.title.y).toBeGreaterThanOrEqual(top.title.y - 1);
+  });
+
+  it('clean: a fit takes well under a second', async () => {
+    const d = CLEAN();
+    const layout = applyTemplate(d, emptyLayout(), 'clean');
+    const t0 = performance.now();
+    await fitToFrame(d, layout, [1600, 900]);
+    expect(performance.now() - t0).toBeLessThan(600);
   });
 
   it('renders every template in every theme, violations marked', () => {
@@ -451,6 +510,23 @@ describe('template operations', () => {
     expect(drawio.source).toMatch(/shape=hexagon;[^"]*pumlTemplate=1/);
     expect(drawio.warnings.map((w) => w.message).join('\n')).toContain('template written as background shapes');
     // Read back: the backdrop is not part of the diagram.
+    const back = parseDrawio(drawio.source).diagram;
+    expect(back.nodes.length).toBe(d.nodes.length);
+    expect(back.containers.length).toBe(0);
+  });
+
+  it('conversion: clean rings are written as rounded rectangles of their size, and read back as a backdrop', () => {
+    const d = CLEAN();
+    const layout = applyTemplate(d, emptyLayout(), 'clean');
+    const scene = sceneOf(d, layout);
+    const drawio = convert(d, layout, 'drawio', scene);
+    const outer = scene.template!.rings.at(-1)!;
+    const cell = drawio.source.split('<mxCell ').find((c) => c.includes(`ring-${outer.id}`))!;
+    expect(cell).toMatch(/rounded=1;arcSize=/);
+    expect(cell).not.toContain('ellipse');
+    const arc = Number(/arcSize=([0-9.]+)/.exec(cell)![1]);
+    expect(arc / 100).toBeCloseTo(outer.c / (2 * Math.min(outer.a, outer.b)), 2);
+    expect(Number(/width="([0-9.]+)"/.exec(cell)![1])).toBeCloseTo(outer.a * 2, 0);
     const back = parseDrawio(drawio.source).diagram;
     expect(back.nodes.length).toBe(d.nodes.length);
     expect(back.containers.length).toBe(0);

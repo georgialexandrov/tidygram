@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { hexPoints, ringOutline, type TemplateScene, type TemplateTitle } from '../scene/template.ts';
+import { hexPoints, type TemplateRing, type TemplateScene, type TemplateTitle } from '../scene/template.ts';
 import type { Theme } from '../scene/theme.ts';
 import { f, Text } from './text.tsx';
 
@@ -12,6 +12,11 @@ import { f, Text } from './text.tsx';
 function Title({ t, theme }: { t: TemplateTitle; theme: Theme }) {
   const caps = theme.containerTitle === 'caps';
   return <Text theme={theme} block={t.text} cx={t.x} top={t.y} align={t.align} weight={caps ? 600 : 'bold'} fill={theme.colors.layerTitle} caps={caps} />;
+}
+
+/** A ring as the rectangle attributes that draw it. */
+function ringRect(center: [number, number], r: { a: number; b: number; c: number }) {
+  return { x: f(center[0] - r.a), y: f(center[1] - r.b), width: f(r.a * 2), height: f(r.b * 2), rx: f(r.c), ry: f(r.c) };
 }
 
 function TemplateBackdropImpl({ t, theme }: { t: TemplateScene; theme: Theme }) {
@@ -35,7 +40,7 @@ function TemplateBackdropImpl({ t, theme }: { t: TemplateScene; theme: Theme }) 
         // Outermost first, so each inner ring paints over the one around it.
         [...t.rings].reverse().map((r) => (
           <g key={r.id} data-layer={r.id}>
-            <path d={ringOutline(t.center!, r.profile)} fill={r.fill} stroke={c.layerStroke} strokeWidth={1} />
+            <rect {...ringRect(t.center!, r)} fill={r.fill} stroke={c.layerStroke} strokeWidth={1} />
           </g>
         ))}
       {t.center && t.rings.map((r) => <Title key={r.id} t={r.title} theme={theme} />)}
@@ -67,8 +72,8 @@ export function TemplateHighlight({ t, layer, color }: { t: TemplateScene; layer
     // The annulus: outer and inner outline.
     return (
       <g data-drop={layer}>
-        <path d={ringOutline(t.center, ring.profile)} {...stroke} />
-        {ring.inner > 0 && <path d={ringOutline(t.center, ring.innerProfile)} {...stroke} />}
+        <rect {...ringRect(t.center, ring)} {...stroke} />
+        {ring.inner.a > 0 && <rect {...ringRect(t.center, { ...ring.inner })} {...stroke} />}
       </g>
     );
   }

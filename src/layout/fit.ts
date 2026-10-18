@@ -170,7 +170,7 @@ function fitTemplate(diagram: Diagram, layout: LayoutFile, frame: Point): FitRes
   const base = themeFor(layout.view?.theme);
   const kind = layout.template!.kind;
   const rows = kind === 'layered' ? [3, 4, 5, 6, 7, 8, 10] : [undefined];
-  let best: { score: number; layout: LayoutFile; scale: number; achieved: number; fill: number; name: string } | undefined;
+  let best: { score: number; layout: LayoutFile; scale: number; achieved: number; fill: number; name: string; spread: number; perRow: number | undefined } | undefined;
   let tried = 0;
   for (const scale of [1, 1.25, 1.5, 1.75, 2, 2.4, 2.8]) {
     const theme = scaledTheme(base, scale, layout.view?.text ?? 1, layout.view?.icons ?? 1);
@@ -179,7 +179,7 @@ function fitTemplate(diagram: Diagram, layout: LayoutFile, frame: Point): FitRes
       for (const perRow of rows) {
         tried++;
         const view = { ...layout.view, frame, scale };
-        const placed = settleTemplate(diagram, { ...layout, view }, { perRow, spread });
+        const placed = settleTemplate(diagram, { ...layout, view }, { perRow, spread, quick: kind === 'clean' });
         const boxes = new Map(diagram.nodes.filter((n) => placed.nodes[n.id]).map((n) => [n.id, nodeBox(placed.nodes[n.id]!, shapes.get(n.id)!)]));
         const t = buildTemplateScene(diagram, placed.template!, boxes, theme);
         const all = [...boxes.values(), t.bounds];
@@ -192,12 +192,14 @@ function fitTemplate(diagram: Diagram, layout: LayoutFile, frame: Point): FitRes
         const score = Math.log(scale / frameW) + 0.15 * Math.log(fill);
         if (!best || score > best.score) {
           const name = `${kind}, size ${Math.round(scale * 100)}%, gaps ${spread}×${perRow ? `, ${perRow} per row` : ''}`;
-          best = { score, layout: placed, scale, achieved: w / h, fill, name };
+          best = { score, layout: placed, scale, achieved: w / h, fill, name, spread, perRow };
         }
       }
     }
   }
-  const fitted = best!.layout;
+  let fitted = best!.layout;
+  // Candidates were placed without the ring search (clean); the winner gets it once, which only makes it smaller.
+  if (kind === 'clean') fitted = settleTemplate(diagram, { ...layout, view: fitted.view }, { perRow: best!.perRow, spread: best!.spread });
   if (fitted.view?.scale === 1) {
     const { scale: _s, ...view } = fitted.view;
     fitted.view = view;

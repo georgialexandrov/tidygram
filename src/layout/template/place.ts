@@ -2,7 +2,7 @@ import type { Diagram } from '../../model/types.ts';
 import { nodeBox, type Box, type Positions } from '../../scene/containers.ts';
 import { nodeShape, type NodeShape } from '../../scene/shapes.ts';
 import { measureText } from '../../scene/measure.ts';
-import { cleanRings, clearOfProfile, hexEdgeX, hexGeometry, layeredBands, profileBox, RING_ASPECT, ringCenter, ringProfile, templateMetrics, titleBlock, type TemplateMetrics } from '../../scene/template.ts';
+import { cleanRings, clearOfRing, fitRing, hexEdgeX, hexGeometry, innerNeeds, layeredBands, memberNeeds, RING_ASPECT, ringArea, ringCenter, templateMetrics, titleBlock, type RingShape, type TemplateMetrics } from '../../scene/template.ts';
 import type { Theme } from '../../scene/theme.ts';
 import type { LayerDef, TemplateSettings } from '../layout-file.ts';
 import { layersOf, resolveAssignments } from './defs.ts';
@@ -22,6 +22,8 @@ export interface PlaceOptions {
   perRow?: number;
   /** Multiplies the gaps between elements (fit to frame tries several). */
   spread?: number;
+  /** Skip the search for the smallest rings (clean): a first, cheap arrangement, for scoring many candidates. */
+  quick?: boolean;
 }
 
 interface Ctx {
@@ -37,6 +39,7 @@ interface Ctx {
   /** Members per layer, in source order. */
   members: Map<string, string[]>;
   spread: number;
+  quick: boolean;
   /** Lines as the source reads them (`A <|-- B` puts A first), for left-to-right order within a row. */
   flows: [string, string][];
   /** Widest label on a line between two elements, by `a|b` (both orders): the gap between them must hold it. */
@@ -66,7 +69,7 @@ function context(diagram: Diagram, template: TemplateSettings, theme: Theme, opt
       for (const key of [`${e.from}|${e.to}`, `${e.to}|${e.from}`]) labels.set(key, Math.max(labels.get(key) ?? 0, w));
     }
   }
-  return { diagram, layers, assigned, shapes, m: templateMetrics(theme), theme, hints: options.hints ?? {}, near, members, spread: options.spread ?? 1, flows, labels };
+  return { diagram, layers, assigned, shapes, m: templateMetrics(theme), theme, hints: options.hints ?? {}, near, members, spread: options.spread ?? 1, quick: options.quick ?? false, flows, labels };
 }
 
 /** Centre-to-centre distance of two row neighbours: half of each, plus the gap, wide enough for a label on a line between them. */
@@ -405,7 +408,7 @@ function placeClean(ctx: Ctx): Positions {
   const hinted = Object.keys(ctx.hints).length > 0;
   const hintCenter = hinted ? ringCenter(layers, new Map(layers.map((l) => [l.id, ctx.members.get(l.id)!.filter((id) => ctx.hints[id]).map((id) => boxOf(ctx, id, ctx.hints[id]!))]))) : undefined;
   // How much staying near the wished angles is worth: a re-place keeps the picture the user has.
-  const lambda = hinted ? 6 : 0.35;
+  const lambda = hinted ? 6 : 0.1;
   const gap = m.nodeGap * 0.6 * ctx.spread;
   const centreRing = (index: number) => {
     const n = ctx.members.get(layers[index]!.id)!.length;
@@ -414,7 +417,7 @@ function placeClean(ctx: Ctx): Positions {
   };
   const center: [number, number] = [0, 0];
 
-  const placeRing = (index: number, inner: number[] | undefined, search: boolean, wishOf: (id: string, k: number, n: number) => number) => {
+  const placeRing = (index: number, inner: RingShape | undefined, search: boolean, wishOf: (id: string, k: number, n: number) => number) => {
     const ids = ctx.members.get(layers[index]!.id)!;
     const n = ids.length;
     if (!n) return;
@@ -427,6 +430,7 @@ function placeClean(ctx: Ctx): Positions {
     const title = titleBlock(layers[index]!.label, ctx.theme);
     const titleBox = { width: title.width, height: m.titleHeight };
     const shapes = ids.map((id) => ctx.shapes.get(id)!);
+    const innerPts = innerNeeds(inner, m);
     const boxOfAt = (k: number, th: number, d: number): Box => nodeBox({ x: A * d * Math.cos(th), y: d * Math.sin(th) }, shapes[k]!);
 
     // The smallest distance (squeezed) at which member k at angle th clears the ring inside.
@@ -438,10 +442,10 @@ function placeClean(ctx: Ctx): Positions {
       if (hit !== undefined) return hit;
       let lo = 0;
       let hi = 40;
-      while (!clearOfProfile(boxOfAt(k, th, hi), center, inner, m.pad) && hi < 20000) (lo = hi), (hi *= 2);
+      while (!clearOfRing(boxOfAt(k, th, hi), center, inner, m.pad) && hi < 20000) (lo = hi), (hi *= 2);
       for (let i = 0; i < 12; i++) {
         const mid = (lo + hi) / 2;
-        if (clearOfProfile(boxOfAt(k, th, mid), center, inner, m.pad)) hi = mid;
+        if (clearOfRing(boxOfAt(k, th, mid), center, inner, m.pad)) hi = mid;
         else lo = mid;
       }
       clearCache.set(key, hi);
@@ -473,9 +477,8 @@ function placeClean(ctx: Ctx): Positions {
         e = hi;
       }
       const boxes = boxesAt(e);
-      const out = profileBox(ringProfile(boxes, center, inner, m, titleBox), center);
+      const area = ringArea(fitRing([...innerPts, ...memberNeeds(boxes, center, m, titleBox)]));
       const dev = mean(thetas.map((th, k) => Math.abs(wrapAngle(th - wishes[k]!)))) / Math.PI;
-      const area = out.w * out.h;
       return { thetas, at: thetas.map((th, k) => ({ x: A * (ds[k]! + e) * Math.cos(th), y: (ds[k]! + e) * Math.sin(th) })), area, cost: area * (1 + lambda * dev) };
     };
 
@@ -491,7 +494,7 @@ function placeClean(ctx: Ctx): Positions {
     if (n === 1) {
       consider(arrange([wishes[0]!], wishes));
     } else {
-      const tries = !search ? 1 : equal ? 16 : 8;
+      const tries = !search ? 1 : equal ? 16 : 24;
       for (let off = 0; off < tries; off++)
         for (let shift = 0; shift < (equal || !search ? 1 : n); shift++) {
           const thetas = new Array<number>(n);
@@ -499,10 +502,10 @@ function placeClean(ctx: Ctx): Positions {
           consider(arrange(thetas, wishes));
         }
       // Free angles: nudge members and swap neighbours while the outline shrinks.
-      for (let round = 0; search && !equal && round < 3 && best; round++) {
+      for (let round = 0; search && !equal && round < 8 && best; round++) {
         const before = best.cost;
         for (let k = 0; k < n; k++)
-          for (const delta of [-0.25, -0.08, 0.08, 0.25]) {
+          for (const delta of [-0.4, -0.15, -0.05, 0.05, 0.15, 0.4]) {
             const thetas = [...best.thetas];
             thetas[k] = wrapAngle(thetas[k]! + delta);
             consider(arrange(thetas, wishes));
@@ -538,8 +541,8 @@ function placeClean(ctx: Ctx): Positions {
   // Inside out, each ring facing what it connects to further in; then again with every neighbour.
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < layers.length; i++) {
-      const inner = i ? ringsNow()[i - 1]?.profile : undefined;
-      placeRing(i, inner, pass === 2, (id, k, n) => hintAngle(id) ?? neighbourAngle(id, (r) => (pass === 0 ? r < i : true)) ?? (angle.get(id) ?? even(k, n)));
+      const inner = i ? ringsNow()[i - 1] : undefined;
+      placeRing(i, inner, pass === 2 && !ctx.quick, (id, k, n) => hintAngle(id) ?? neighbourAngle(id, (r) => (pass === 0 ? r < i : true)) ?? (angle.get(id) ?? even(k, n)));
     }
   }
   if (hintCenter) for (const p of Object.values(at)) (p.x += hintCenter[0]), (p.y += hintCenter[1]);
