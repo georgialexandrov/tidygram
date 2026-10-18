@@ -27,6 +27,8 @@ import { largestScale } from '../layout/scale.ts';
 import { convert, formatOf as sourceFormatOf, TARGET_EXTENSION, type ConvertResult, type ConvertTarget } from '../convert/index.ts';
 
 const SIZES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+import { DEMO, addOpened, attachLayoutHandle, canPickHandles, ensureWritable, hasLayoutHandle, isLocal, isOpened, listFiles, openedFiles, pickWithHandles, readDoc, writeLayout, type FileHandle } from './fileStore.ts';
+import { OPEN_ACCEPT, looksLikeDiagram, pairFiles, withOpened } from './openFiles.ts';
 import { alignmentSnap, clearEnd, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setEnd, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
 import { snapAttach, snapPoints } from '../scene/attach.ts';
 import type { AnchorShape } from '../scene/geometry.ts';
@@ -190,9 +192,9 @@ type Drag =
       latest?: LayoutFile;
     }
   | { kind: 'edge'; id: string; start: Point; before: LayoutFile }
-  | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean }
-  | { kind: 'end'; id: string; end: 'from' | 'to'; start: Point; before: LayoutFile; moved: boolean }
-  | { kind: 'label'; id: string; start: Point; origin: Point; before: LayoutFile; moved: boolean }
+  | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean; latest?: LayoutFile }
+  | { kind: 'end'; id: string; end: 'from' | 'to'; start: Point; before: LayoutFile; moved: boolean; latest?: LayoutFile }
+  | { kind: 'label'; id: string; start: Point; origin: Point; before: LayoutFile; moved: boolean; latest?: LayoutFile }
   | { kind: 'pan'; client: Point; origin: View; moved: boolean }
   | { kind: 'marquee'; start: Point; client: Point; additive: boolean; base: ReadonlySet<string>; box: Box | null };
 
@@ -259,6 +261,10 @@ const browserFonts = memoFetcher();
 
 export function Editor({ avoid }: { avoid: Avoid }) {
   const [files, setFiles] = useState<string[]>([]);
+  /** Keys of files opened from disk (`opened/…`), listed after the server's or the samples' files. */
+  const [opened, setOpened] = useState<string[]>([]);
+  const [dropping, setDropping] = useState(false);
+  const listed = useMemo(() => withOpened(files, opened), [files, opened]);
   const [file, setFile] = useState<string | null>(() => new URLSearchParams(location.search).get('file'));
   /** draw.io page id (`?page=`); undefined = the first page, whose layout is the sidecar's top level. */
   const [page, setPage] = useState<string | undefined>(() => new URLSearchParams(location.search).get('page') ?? undefined);
@@ -324,8 +330,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     if (!p) return;
     pendingSave.current = null;
     try {
-      const res = await fetch(`/api/layout?file=${encodeURIComponent(p.target)}`, { method: 'PUT', body: p.body });
-      setStatus(res.ok ? 'saved' : 'error');
+      setStatus((await writeLayout(p.target, p.body)) ? 'saved' : 'error');
     } catch {
       setStatus('error');
     }
@@ -366,9 +371,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         const t0 = performance.now();
         // A page switch re-reads the sidecar: the last edit must be on disk first, or it would be read back stale.
         await writePending();
-        const res = await fetch(`/api/doc?file=${encodeURIComponent(target)}`);
-        if (!res.ok) throw new Error((await res.json()).error ?? res.statusText);
-        const body = (await res.json()) as { source: string; layout: string | null };
+        const body = await readDoc(target);
         const t1 = performance.now();
         perf.record('open: fetch', t1 - t0);
         const parsed = parseDiagram(body.source, target, { page: pageRef.current });
@@ -412,11 +415,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   );
 
   useEffect(() => {
-    fetch('/api/files')
-      .then((r) => r.json())
-      .then((j: { files: string[] }) => {
-        setFiles(j.files);
-        if (!fileRef.current && j.files[0]) setFile(j.files[0]);
+    listFiles()
+      .then((list) => {
+        setFiles(list);
+        if (!fileRef.current && list[0]) setFile(list[0]);
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -709,7 +711,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         // Grabbing a line and pulling it adds a bend under the pointer.
         const { layout: base, index } = insertVia(d.before, doc.diagram, d.id, [Math.round(p[0]), Math.round(p[1])]);
         if (index < 0) return;
-        drag.current = { kind: 'via', id: d.id, index, before: d.before, base, moved: true };
+        drag.current = { kind: 'via', id: d.id, index, before: d.before, base, moved: true, latest: base };
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
         setLayout(base);
         break;
@@ -717,7 +719,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       case 'via':
         d.moved = true;
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
-        setLayout(moveVia(d.base, d.id, d.index, [Math.round(p[0]), Math.round(p[1])]));
+        d.latest = moveVia(d.base, d.id, d.index, [Math.round(p[0]), Math.round(p[1])]);
+        setLayout(d.latest);
         break;
       case 'end': {
         if (!d.moved && Math.hypot(p[0] - d.start[0], p[1] - d.start[1]) < DRAG_THRESHOLD / k) return;
@@ -728,7 +731,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         // Only the attachment moves along the outline: the source says what the line connects.
         const snapped = snapAttach(target.anchor, p, END_SNAP / k, e.altKey);
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
-        setLayout(setEnd(d.before, d.id, d.end, snapped.attach));
+        d.latest = setEnd(d.before, d.id, d.end, snapped.attach);
+        setLayout(d.latest);
         setEndHint({ id: d.id, end: d.end, at: snapped.outline });
         break;
       }
@@ -738,7 +742,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD / k) return;
         d.moved = true;
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
-        setLayout(setLabelOffset(d.before, d.id, [Math.round(d.origin[0] + dx), Math.round(d.origin[1] + dy)]));
+        d.latest = setLabelOffset(d.before, d.id, [Math.round(d.origin[0] + dx), Math.round(d.origin[1] + dy)]);
+        setLayout(d.latest);
         break;
       }
       case 'pan': {
@@ -778,11 +783,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       }
       case 'via':
       case 'label':
-        if (d.moved) commit({ ...layoutRef.current }, d.before);
+        if (d.moved) commit({ ...(d.latest ?? layoutRef.current) }, d.before);
         break;
       case 'end':
         setEndHint(null);
-        if (d.moved) commit({ ...layoutRef.current }, d.before);
+        if (d.moved) commit({ ...(d.latest ?? layoutRef.current) }, d.before);
         break;
       case 'pan':
         setPanning(spaceHeld.current);
@@ -1128,6 +1133,126 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     [doc, commit, flash],
   );
 
+  const openInput = useRef<HTMLInputElement>(null);
+  /**
+   * Opens files from disk: each diagram with the `x.layout.json` picked or dropped next to it. They live in
+   * memory (the source is never written); a sidecar handle, where the browser gives one, is written back on save.
+   * A sidecar alone goes to the diagram on screen, like Import layout.
+   */
+  const openPicked = useCallback(
+    async (picked: { name: string; file: File; handle?: FileHandle }[]) => {
+      const { pairs, strayLayouts, rejected } = pairFiles(picked);
+      try {
+        const keys: string[] = [];
+        for (const { diagram, layout } of pairs) {
+          const text = await diagram.file.text();
+          if (!looksLikeDiagram(diagram.name, text)) {
+            setError(`${diagram.name} is not a draw.io file`);
+            continue;
+          }
+          let sidecar: string | null = null;
+          let handle: FileHandle | undefined;
+          if (layout) {
+            if (layout.handle && (await ensureWritable(layout.handle))) handle = layout.handle;
+            sidecar = await layout.file.text();
+            try {
+              parseLayout(sidecar);
+            } catch {
+              setError(`${layout.name} is not valid layout JSON, ignoring it`);
+              sidecar = null;
+            }
+          }
+          keys.push(addOpened(diagram.name, text, sidecar, handle));
+        }
+        if (!pairs.length && strayLayouts[0]) {
+          if (doc) await importLayout(strayLayouts[0].file);
+          else setError(`${strayLayouts[0].name} needs its diagram: open or drop both together`);
+        } else if (!pairs.length && rejected[0]) {
+          setError(`Can't open ${rejected[0].name}: expected ${OPEN_ACCEPT.replace(/,\.json$/, '')} (plus x.layout.json)`);
+        }
+        if (!keys.length) return;
+        setOpened(openedFiles());
+        setPage(undefined);
+        if (keys[0] === fileRef.current) void load(keys[0]!);
+        else setFile(keys[0]!);
+        flash(keys.length > 1 ? `Opened ${keys.length} files` : `Opened ${picked[0]?.name ?? keys[0]}`);
+      } catch (e) {
+        setError(`Open failed: ${String(e)}`);
+      }
+    },
+    [doc, importLayout, load, flash],
+  );
+  const openRef = useRef(openPicked);
+  openRef.current = openPicked;
+
+  /** Open file…: Chrome's picker with handles when there is one, else the plain file input. */
+  const openDialog = useCallback(async () => {
+    if (!canPickHandles()) return openInput.current?.click();
+    const got = await pickWithHandles();
+    if (got) await openPicked(got.map((g) => ({ name: g.file.name, file: g.file, handle: g.handle })));
+  }, [openPicked]);
+
+  // Whole files dropped anywhere on the window; the overlay shows while files are over it.
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      setDropping(true);
+    };
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+    };
+    const leave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDropping(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDropping(false);
+      // Handles must be requested before the first await: the items are only valid during the event.
+      const items = [...e.dataTransfer!.items].filter((i) => i.kind === 'file');
+      const handles = items.map((i) => (i as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileHandle & { kind?: string }> }).getAsFileSystemHandle?.().catch(() => undefined));
+      const files = items.map((i) => i.getAsFile());
+      void Promise.all(handles).then((hs) => {
+        const picked = files.flatMap((file, i) => (file ? [{ name: file.name, file, handle: hs[i]?.kind === 'file' ? hs[i] : undefined }] : []));
+        if (picked.length) void openRef.current(picked);
+      });
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
+    };
+  }, []);
+
+  /**
+   * Save layout for files with no server: writes through the sidecar handle (asking once where, in Chrome),
+   * else downloads x.layout.json.
+   */
+  const saveLayoutFile = useCallback(async () => {
+    const target = fileRef.current;
+    if (!target || !doc) return;
+    if (isOpened(target) && !hasLayoutHandle(target) && canPickHandles()) await attachLayoutHandle(target, sidecarName(doc.file));
+    if (isOpened(target) && hasLayoutHandle(target)) {
+      const ok = await writeLayout(target, serializeLayout(sidecarWith(layoutRef.current)));
+      setStatus(ok ? 'saved' : 'error');
+      flash(ok ? `Saved ${sidecarName(doc.file)}` : 'Save failed: no write access');
+    } else exportLayout();
+  }, [doc, sidecarWith, exportLayout, flash]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
@@ -1194,12 +1319,35 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   return (
     // `data-loaded` names the file whose scene is on screen (`data-page` its draw.io page): the browser scripts wait on them (scripts/cdp.mjs open()).
     <div className="app" data-loaded={doc?.file} data-page={doc?.pages?.[doc.page ?? 0]?.key}>
+      {dropping && (
+        <div className="drop-overlay" role="presentation">
+          <div className="drop-card">
+            <strong>Drop to open</strong>
+            <span>a diagram (.puml .mmd .drawio) and, optionally, its x.layout.json</span>
+          </div>
+        </div>
+      )}
       <header className="toolbar">
         <div className="nameplate" aria-label="puml layout">
           <span className="nameplate-name">puml</span>
           <span className="nameplate-model">Layout</span>
         </div>
-        <FilePicker files={files} file={file} onPick={pickFile} />
+        <FilePicker files={listed} file={file} onPick={pickFile} />
+        <button className="open-file" data-action="open-file" onClick={() => void openDialog()} title="Open a diagram from disk (or drop files on the window); pick x.layout.json together with it to load both">
+          Open…
+        </button>
+        <input
+          ref={openInput}
+          type="file"
+          multiple
+          accept={OPEN_ACCEPT}
+          hidden
+          data-action="open-input"
+          onChange={(e) => {
+            void openPicked([...(e.target.files ?? [])].map((f) => ({ name: f.name, file: f })));
+            e.target.value = '';
+          }}
+        />
         {doc?.pages && (
           <select
             className="page-select"
@@ -1407,6 +1555,22 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             {status === 'saving' ? 'saving' : status === 'saved' ? 'saved' : status === 'error' ? 'save failed' : ''}
           </span>
         </div>
+        {isLocal(file) && !blank && (
+          <button
+            data-action="save-layout"
+            aria-label="Save layout"
+            onClick={() => void saveLayoutFile()}
+            title={
+              isOpened(file) && hasLayoutHandle(file)
+                ? 'Edits are written to the layout.json you chose'
+                : DEMO && !isOpened(file)
+                  ? 'Edits to samples are kept in this browser; download the layout as x.layout.json'
+                  : 'Edits are in memory only: save x.layout.json (the diagram is never changed)'
+            }
+          >
+            Save
+          </button>
+        )}
         <div className="keys split" role="group" aria-label="Export">
           <button className="primary" disabled={blank} onClick={exportSvg} title="Download the laid-out diagram as SVG">
             Export<span className="wide-only"> SVG</span>
