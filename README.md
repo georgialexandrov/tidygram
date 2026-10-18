@@ -8,9 +8,9 @@ elements are placed next to what they connect to.
 
 ## Demo
 
-[![tidygram demo](docs/media/demo.gif)](docs/media/demo.mp4)
+[![tidygram in 34 seconds — click for the narrated video](docs/media/demo.gif)](docs/media/tidygram.mp4)
 
-[Watch the MP4](docs/media/demo.mp4) (higher quality). Regenerate both with `DEMO_BASE=/x/ pnpm build:demo && pnpm record:demo`.
+[Watch the narrated video](docs/media/tidygram.mp4) (34 s, with sound): PlantUML only takes layout hints inside the source; tidygram keeps the positions in a separate `layout.json` and never touches the source.
 
 **Try it in your browser:** <https://georgi.alexandrov.dev/tidygram/>
 
