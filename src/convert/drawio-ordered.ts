@@ -6,6 +6,7 @@ import type { Box } from '../scene/containers.ts';
 import { buildGanttScene, buildTimingScene, type GanttScene, type TimingScene } from '../scene/gantt.ts';
 import type { SceneNode } from '../scene/scene.ts';
 import { buildSequenceScene, type SequenceScene } from '../scene/sequence.ts';
+import { pointAt } from '../scene/geometry.ts';
 import { FREE_SIZE } from '../scene/shapes.ts';
 import { accentTint, mix, type Theme } from '../scene/theme.ts';
 import { KindLosses, warn, type ConvertResult, type IdMap } from './common.ts';
@@ -34,7 +35,7 @@ export function orderedToDrawio(model: SequenceModel | GanttModel | TimingModel,
   if (model.type === 'sequence') {
     const scene = given?.kind === 'sequence' ? given : buildSequenceScene(model, layout);
     theme = scene.theme;
-    sequenceCells(scene, page, losses);
+    sequenceCells(scene, page);
     warnings.push(warn('Sequence diagram written as a drawing: draw.io has no sequence model, so it reads back as boxes and lines'));
   } else if (model.type === 'gantt') {
     const scene = given?.kind === 'gantt' ? given : buildGanttScene(model, layout);
@@ -123,7 +124,7 @@ const seqMarker = (end: 'end' | 'start', head: SeqHead) => {
   return `${end}Arrow=${marker};${end}Fill=${fill};`;
 };
 
-function sequenceCells(scene: SequenceScene, page: Page, losses: KindLosses): void {
+function sequenceCells(scene: SequenceScene, page: Page): void {
   const { theme } = scene;
   const c = theme.colors;
   const k = theme.scale;
@@ -145,16 +146,31 @@ function sequenceCells(scene: SequenceScene, page: Page, losses: KindLosses): vo
   for (const d of scene.delays) {
     if (d.label) page.text('delay', html(d.label.lines.join('\n')), { x: d.x - d.label.width / 2 - 4, y: (d.y0 + d.y1) / 2 - d.label.height / 2, w: d.label.width + 8, h: d.label.height }, `align=center;verticalAlign=middle;fontStyle=2;${font(theme, theme.size.edge, c.muted)}`);
   }
-  if (scene.delays.length) losses.add('delay (lifelines are not cut)');
 
   // Lifelines and activation bars: everything a message can end on.
   const anchors: { id: string; box: Box }[] = [];
-  const lifelines = new Map<string, { id: string; box: Box }>();
+  const lifelines = new Map<string, { id: string; box: Box }[]>();
+  const cuts = [...scene.delays].sort((a, b) => a.y0 - b.y0);
+  const lifeStroke = theme.plantuml ? c.shapeStroke : c.grid;
   for (const l of scene.lifelines) {
     // A box whose left border is the lifeline: unlike a rotated `line` shape, its exit/entry fractions aren't turned.
-    const box = { x: l.x, y: l.y0, w: 10, h: Math.max(1, l.y1 - l.y0) };
-    const id = page.vertex(`${l.id}-lifeline`, '', `shape=partialRectangle;top=0;right=0;bottom=0;left=1;fillColor=none;dashed=1;strokeColor=${theme.plantuml ? c.shapeStroke : c.grid};`, box);
-    lifelines.set(l.id, { id, box });
+    const segment = (y0: number, y1: number, style: string, name: string) => {
+      const box = { x: l.x, y: y0, w: 10, h: Math.max(1, y1 - y0) };
+      return { id: page.vertex(name, '', `shape=partialRectangle;top=0;right=0;bottom=0;left=1;fillColor=none;strokeColor=${lifeStroke};${style}`, box), box };
+    };
+    // A delay cuts the lifeline: dashed above and below, a dotted stretch across it (as we draw it).
+    const parts: { id: string; box: Box }[] = [];
+    let y = l.y0;
+    for (const d of cuts) {
+      if (d.y1 <= y || d.y0 >= l.y1) continue;
+      const from = Math.max(y, d.y0);
+      if (from > y) parts.push(segment(y, from, 'dashed=1;', `${l.id}-lifeline`));
+      const to = Math.min(l.y1, d.y1);
+      segment(from, to, `dashed=1;dashPattern=1 4;strokeWidth=1.5;strokeColor=${theme.plantuml ? c.shapeStroke : mix(c.grid, c.line, 0.5)};`, `${l.id}-delay`);
+      y = to;
+    }
+    if (l.y1 > y || !parts.length) parts.push(segment(y, l.y1, 'dashed=1;', `${l.id}-lifeline`));
+    lifelines.set(l.id, parts);
   }
   const barFill = theme.plantuml ? c.shapeFill : accentTint(theme, 0.12);
   const barStroke = theme.plantuml ? c.shapeStroke : accentTint(theme, 0.35);
@@ -184,7 +200,9 @@ function sequenceCells(scene: SequenceScene, page: Page, losses: KindLosses): vo
   const participant = (n: SceneNode, foot: boolean) => {
     const box = FREE_SIZE.has(n.node.kind) ? { x: n.anchor.cx - n.anchor.w / 2, y: n.anchor.cy - n.anchor.h / 2, w: n.anchor.w, h: n.anchor.h } : n.box;
     const folded = foldLabel(n.node);
-    const style = `${KIND_STYLE[n.node.kind] ?? 'rounded=0;'}fillColor=${c.shapeFill};strokeColor=${c.shapeStroke};${font(theme, theme.size.node, c.text)}${folded.style}`;
+    // A plain participant box has the theme's corners, as the render draws it.
+    const corners = theme.nodeRadius > 0 ? `rounded=1;arcSize=${Math.round(Math.min(box.h / 2, theme.nodeRadius))};absoluteArcSize=1;` : 'rounded=0;';
+    const style = `${n.node.kind === 'rectangle' ? corners : (KIND_STYLE[n.node.kind] ?? 'rounded=0;')}fillColor=${c.shapeFill};strokeColor=${c.shapeStroke};${font(theme, theme.size.node, c.text)}${folded.style}`;
     const id = page.vertex(foot ? `${n.node.id}-foot` : n.node.id, folded.value, style, box);
     if (!foot) {
       page.named.set(n.node.id, id);
@@ -194,14 +212,14 @@ function sequenceCells(scene: SequenceScene, page: Page, losses: KindLosses): vo
   for (const n of scene.heads) participant(n, false);
   for (const n of scene.feet) participant(n, true);
   for (const d of scene.destroys) page.text('destroy', '✕', { x: d.x - 9 * k, y: d.y - 9 * k, w: 18 * k, h: 18 * k }, `align=center;verticalAlign=middle;fontStyle=1;${font(theme, 16 * k, theme.plantuml ? c.text : c.warning)}`);
-  anchors.push(...lifelines.values());
+  for (const parts of lifelines.values()) anchors.push(...parts);
 
   /** The vertex a message end sits on: an activation bar, a created participant's head, else the nearest lifeline. */
   const endAt = (x: number, y: number, participantId: string): { id: string; box: Box } => {
     const hit = anchors.find((a) => x >= a.box.x - 1.5 && x <= a.box.x + a.box.w + 1.5 && y >= a.box.y - 1.5 && y <= a.box.y + a.box.h + 1.5);
     if (hit) return hit;
     const own = lifelines.get(participantId);
-    if (own) return own;
+    if (own) return own.find((p) => y >= p.box.y - 1.5 && y <= p.box.y + p.box.h + 1.5) ?? own[0]!;
     // Lost and found messages: a small dot at the diagram's edge, as UML draws them.
     const box = { x: x - 4 * k, y: y - 4 * k, w: 8 * k, h: 8 * k };
     return { id: page.vertex('gate', '', `ellipse;fillColor=${c.text};strokeColor=none;`, box), box };
@@ -209,20 +227,34 @@ function sequenceCells(scene: SequenceScene, page: Page, losses: KindLosses): vo
   for (const m of scene.messages) {
     const e = m.e;
     const style = `edgeStyle=none;rounded=0;${e.dashed ? 'dashed=1;' : ''}${seqMarker('end', e.head)}${seqMarker('start', e.tail)}strokeColor=${theme.plantuml ? c.line : e.dashed ? c.dependency : mix(c.line, c.text, 0.35)};${edgeFont}fontColor=${e.dashed ? c.dependencyLabel : c.text};labelBackgroundColor=none;`;
-    const label = [e.number ? `<b>${html(e.number)}</b>` : '', e.label ? html(e.label) : ''].filter(Boolean).join('&nbsp; ');
+    // Modern themes draw the autonumber as a bubble beside the label; PlantUML keeps it in the text.
+    const bubble = m.number;
+    const label = [e.number && !bubble ? `<b>${html(e.number)}</b>` : '', e.label ? html(e.label) : ''].filter(Boolean).join('&nbsp; ');
+    // With a bubble, the label sits where we draw it (draw.io's offset from the line's middle) instead of centred above the line.
+    const placed = (points: Point[]): { offset?: Point } => {
+      if (!bubble || !m.label) return {};
+      const mid = pointAt(points, 0.5);
+      const cx = m.label.align === 'start' ? m.label.x + m.label.text.width / 2 : m.label.x;
+      return { offset: [cx - mid[0], m.label.y - mid[1]] };
+    };
     let id: string;
     if (m.self) {
       const h = 18 * k;
       const from = endAt(m.x1, m.y, e.from);
       const to = endAt(m.x1, m.y + h, e.from);
-      id = page.edge(e.id, label, `${style}align=left;verticalAlign=middle;spacingLeft=${Math.round(6 * k)};${pinAt('exit', [m.x1, m.y], from.box)}${pinAt('entry', [m.x1, m.y + h], to.box)}`, from.id, to.id, [
-        [m.x2, m.y],
-        [m.x2, m.y + h],
-      ]);
+      const loop: Point[] = [[m.x1, m.y], [m.x2, m.y], [m.x2, m.y + h], [m.x1, m.y + h]];
+      const at = placed(loop);
+      id = page.edge(e.id, label, `${style}${at.offset ? '' : `align=left;verticalAlign=middle;spacingLeft=${Math.round(6 * k)};`}${pinAt('exit', [m.x1, m.y], from.box)}${pinAt('entry', [m.x1, m.y + h], to.box)}`, from.id, to.id, loop.slice(1, 3), at.offset);
     } else {
       const from = endAt(m.x1, m.y, e.from);
       const to = endAt(m.x2, m.y, e.to);
-      id = page.edge(e.id, label, `${style}verticalAlign=bottom;${pinAt('exit', [m.x1, m.y], from.box)}${pinAt('entry', [m.x2, m.y], to.box)}`, from.id, to.id);
+      const at = placed([[m.x1, m.y], [m.x2, m.y]]);
+      id = page.edge(e.id, label, `${style}${at.offset ? '' : 'verticalAlign=bottom;'}${pinAt('exit', [m.x1, m.y], from.box)}${pinAt('entry', [m.x2, m.y], to.box)}`, from.id, to.id, [], at.offset);
+    }
+    if (bubble) {
+      const dashed = e.dashed;
+      const size = bubble.r * 2;
+      page.vertex(`${e.id}-number`, html(bubble.text), `ellipse;fillColor=${dashed ? c.surface : c.accent};strokeColor=none;fontStyle=1;${font(theme, theme.size.edge * 0.82, dashed ? c.muted : c.onAccent)}spacing=0;`, { x: bubble.x - bubble.r, y: bubble.y - bubble.r, w: size, h: size });
     }
     page.namedEdges.set(e.id, id);
   }

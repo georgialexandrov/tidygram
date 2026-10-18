@@ -36,42 +36,34 @@ const LOSSES: Record<string, string[]> = {
   // PlantUML description diagrams have no rounded box, diamond or pseudo-state outlines.
   'activity.puml → puml': ['node kind action→rectangle', 'node kind choice→hexagon', 'node kind decision→hexagon', 'node kind final→circle', 'node kind fork→rectangle', 'node kind initial→circle'],
   'activity.puml → mermaid': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind decision→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind note→card'],
-  'activity.puml → drawio': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind decision→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute'],
+  'activity.puml → drawio': ['edge kind noteLink→dependency'],
   // ArchiMate's filled-dot (assignment) end has no PlantUML arrow token.
   'archimate.puml → puml': ['edge tail dot→circle'],
   'archimate.puml → mermaid': ['edge head diamondFilled→arrow', 'edge head triangle→arrow', 'edge kind composition→association', 'edge kind realization→dependency', 'edge tail dot→arrow', 'node kind circle→attribute', 'stereotype'],
-  'archimate.puml → drawio': ['node kind circle→attribute'],
   'c4.puml → mermaid': ['node kind container→rectangle', 'node kind person→rectangle', 'node kind system→rectangle'],
-  'c4.puml → drawio': ['node kind container→rectangle', 'node kind person→actor', 'node kind queue→database', 'node kind system→rectangle'],
   'chen.puml → puml': ['node kind attribute→usecase', 'node kind relationship→hexagon'],
   'chen.puml → mermaid': ['node kind circle→attribute'],
-  'chen.puml → drawio': ['node kind circle→attribute'],
   'component.puml → mermaid': ['node kind actor→rectangle', 'node kind component→rectangle', 'node kind interface→attribute', 'stereotype'],
-  'component.puml → drawio': ['node kind queue→database'],
   'deployment.puml → mermaid': ['node kind artifact→file', 'node kind node→rectangle'],
-  'deployment.puml → drawio': ['node kind artifact→file', 'node kind queue→database', 'node kind storage→action'],
   // Mermaid ER rows are `type name PK "comment"`: the text is reformatted.
   'er.puml → mermaid': ['members'],
   'food-delivery.puml → mermaid': ['edge head triangle→arrow', 'edge kind generalization→association', 'edge kind noteLink→dependency', 'node kind actor→rectangle', 'node kind note→card', 'node kind usecase→action', 'stereotype'],
-  'food-delivery.puml → drawio': ['edge kind noteLink→dependency', 'node kind usecase→attribute'],
+  'food-delivery.puml → drawio': ['edge kind noteLink→dependency'],
   'gantt.puml → mermaid': ['task colour', 'task completion'],
   'json.puml → puml': ['class kind json→object'],
   'json.puml → mermaid': ['class kind json→class'],
-  'mindmap.puml → drawio': ['node kind topic→action'],
-  'wbs.puml → drawio': ['node kind topic→action'],
   'nwdiag.puml → puml': ['description', 'node kind network→rectangle'],
   'nwdiag.puml → mermaid': ['edge end labels', 'node kind network→rectangle'],
   'nwdiag.puml → drawio': ['node kind network→rectangle'],
   // Mermaid has no dividers or delays.
   'sequence.puml → mermaid': ['event sequence'],
-  'state.puml → drawio': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
+  'state.puml → drawio': ['edge kind noteLink→dependency'],
   'yaml.puml → puml': ['class kind json→object'],
   'yaml.puml → mermaid': ['class kind json→class'],
   'mermaid/class.mmd → drawio': ['edge kind noteLink→dependency'],
   'mermaid/flowchart.mmd → puml': ['node kind action→rectangle', 'node kind attribute→usecase', 'node kind relationship→hexagon'],
-  'mermaid/flowchart.mmd → drawio': ['edge hidden', 'node kind storage→action'],
-  'mermaid/mindmap.mmd → drawio': ['node kind topic→action'],
-  'mermaid/state.mmd → drawio': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
+  'mermaid/flowchart.mmd → drawio': ['edge hidden'],
+  'mermaid/state.mmd → drawio': ['edge kind noteLink→dependency'],
   // A line from a note is a note link to PlantUML; draw.io calls it a dashed dependency.
   'drawio/compressed.drawio → puml': ['edge kind dependency→noteLink', 'node kind action→rectangle', 'node kind attribute→usecase', 'node kind relationship→hexagon'],
   'drawio/compressed.drawio → mermaid': ['node kind actor→rectangle', 'node kind label→rectangle', 'node kind note→card'],
@@ -180,10 +172,10 @@ const THERE_AND_BACK: [fixture: string, via: ConvertTarget, back: ConvertTarget,
   ['sequence.puml', 'mermaid', 'puml', ['event sequence']],
   ['gantt.puml', 'mermaid', 'puml', ['task colour', 'task completion']],
   ['mermaid/class.mmd', 'puml', 'mermaid', []],
-  ['mermaid/flowchart.mmd', 'drawio', 'mermaid', ['edge hidden', 'node kind storage→action']],
+  ['mermaid/flowchart.mmd', 'drawio', 'mermaid', ['edge hidden']],
   ['mermaid/sequence.mmd', 'puml', 'mermaid', []],
-  // Ellipses come home (usecase → ellipse → attribute); rounded boxes and diamonds don't.
-  ['drawio/flowchart.drawio', 'puml', 'drawio', ['node kind action→rectangle', 'node kind relationship→hexagon']],
+  // PlantUML turns the ellipses into use cases and draw.io now keeps that kind (`pumlKind`); rounded boxes and diamonds are gone already.
+  ['drawio/flowchart.drawio', 'puml', 'drawio', ['node kind action→rectangle', 'node kind attribute→usecase', 'node kind relationship→hexagon']],
   ['drawio/objects.drawio', 'mermaid', 'drawio', [
     'edge end labels', 'edge head diamondFilled→arrow', 'edge head diamond→arrow', 'edge head dot→arrow', 'edge head triangle→arrow',
     'edge kind aggregation→association', 'edge kind composition→association', 'edge kind generalization→association', 'edge kind realization→dependency', 'node kind component→rectangle',
@@ -313,6 +305,21 @@ describe('draw.io output', () => {
     const child = diagram.nodes.find((n) => n.parent === pkg.id)!;
     const cell = cells.find((c) => c.attrs.id === child.id)!;
     expect(cell.attrs.parent).toBe(pkg.id);
+  });
+
+  it('keeps C4 kinds (and the external marker) through draw.io', async () => {
+    const diagram = read('c4.puml');
+    const { layout, scene } = await prepared(diagram);
+    const { result, back } = roundTrip(diagram, layout, 'drawio', scene);
+    expect(result.source).toContain('pumlKind=person;');
+    const kinds = new Map(back.nodes.map((n) => [n.id, n]));
+    for (const n of diagram.nodes) {
+      const got = kinds.get(result.ids.nodes[n.id]!)!;
+      expect(got.kind, n.id).toBe(n.kind);
+      expect(!!got.external, n.id).toBe(!!n.external);
+    }
+    expect(new Set(diagram.nodes.map((n) => n.kind))).toContain('person');
+    expect(diagram.nodes.some((n) => n.external)).toBe(true);
   });
 
   it('warns that an ordered diagram becomes a drawing', () => {

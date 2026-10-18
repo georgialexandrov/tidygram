@@ -74,13 +74,64 @@ describe('drawings of ordered diagrams', () => {
     }
     expect(checked).toBeGreaterThan(10);
     for (const l of before.lifelines) {
-      const box = scene.nodes.find((n) => n.node.id === `${l.id}-lifeline`)!.box;
-      expect(near(box.x, l.x) && near(box.y, l.y0) && near(box.y + box.h, l.y1), l.id).toBe(true);
+      const parts = scene.nodes.filter((n) => new RegExp(`^${l.id}-(lifeline|delay)(-\\d+)?$`).test(n.node.id)).map((n) => n.box).sort((a, b) => a.y - b.y);
+      expect(near(parts[0]!.x, l.x) && near(parts[0]!.y, l.y0) && near(parts.at(-1)!.y + parts.at(-1)!.h, l.y1), l.id).toBe(true);
+      // The pieces meet end to end: a delay cuts the line, it does not leave a hole.
+      for (let i = 1; i < parts.length; i++) expect(near(parts[i]!.y, parts[i - 1]!.y + parts[i - 1]!.h), `${l.id} piece ${i}`).toBe(true);
     }
     // Frames are open drawings, not filled boxes that hide what is under them.
     const frames = diagram.nodes.filter((n) => /shape=umlFrame/.test(n.drawn?.style ?? ''));
     expect(frames.length).toBeGreaterThan(1);
     for (const f of frames) expect(f.drawn!.style).toMatch(/fillColor=none/);
+  });
+
+  it('sequence.puml: a delay cuts every lifeline and dots it across the gap', async () => {
+    const { before, diagram, scene, opened } = await reopened('sequence.puml');
+    if (before.kind !== 'sequence') throw new Error('not a sequence');
+    expect(before.delays.length).toBeGreaterThan(0);
+    expect(opened.warnings).toEqual([]);
+    for (const d of before.delays) {
+      for (const l of before.lifelines) {
+        if (d.y0 < l.y0 || d.y1 > l.y1) continue;
+        const dotted = scene.nodes.find((n) => n.node.id.startsWith(`${l.id}-delay`) && near(n.box.y, d.y0) && near(n.box.y + n.box.h, d.y1));
+        expect(dotted, `${l.id} across the delay`).toBeDefined();
+        expect(diagram.nodes.find((n) => n.id === dotted!.node.id)!.drawn!.style).toMatch(/dashPattern=1 4/);
+        // Nothing solid under the gap.
+        const solid = scene.nodes.filter((n) => /-lifeline(-\d+)?$/.test(n.node.id) && n.node.id.startsWith(`${l.id}-`) && n.box.y < d.y1 - 1 && n.box.y + n.box.h > d.y0 + 1);
+        expect(solid, `${l.id} under the delay`).toEqual([]);
+      }
+    }
+    expect(convert(parseDiagram(readFileSync(new URL('sequence.puml', root), 'utf8'), 'sequence.puml').diagram, emptyLayout(), 'drawio').warnings.some((w) => /lifelines are not cut/.test(w.message))).toBe(false);
+  });
+
+  it('sequence.puml: autonumbers reopen as bubbles, not as text in the label', async () => {
+    const { before, scene } = await reopened('sequence.puml');
+    if (before.kind !== 'sequence') throw new Error('not a sequence');
+    const numbered = before.messages.filter((m) => m.number);
+    expect(numbered.length).toBeGreaterThan(10);
+    for (const m of numbered) {
+      const bubble = scene.nodes.find((n) => n.node.id === `${m.e.id}-number`)!;
+      expect(bubble, m.e.id).toBeDefined();
+      expect(bubble.node.label).toBe(m.number!.text);
+      expect(bubble.node.drawn!.style).toMatch(/ellipse/);
+      expect(near(bubble.box.x + bubble.box.w / 2, m.number!.x) && near(bubble.box.y + bubble.box.h / 2, m.number!.y), m.e.id).toBe(true);
+      expect(near(bubble.box.w, m.number!.r * 2), m.e.id).toBe(true);
+      // The label no longer carries the number, and sits where the render puts it.
+      const line = scene.edges.find((e) => e.edge.id === m.e.id)!;
+      expect(line.label!.text.lines.join(' ')).toBe(m.e.label);
+      if (!m.self) expect(near(line.label!.y, m.label!.y), m.e.id).toBe(true);
+    }
+  });
+
+  it('sequence.puml: participant heads keep the theme corners', async () => {
+    const { before, scene, diagram } = await reopened('sequence.puml');
+    if (before.kind !== 'sequence') throw new Error('not a sequence');
+    const head = before.heads.find((h) => h.node.kind === 'rectangle')!;
+    const style = diagram.nodes.find((n) => n.id === head.node.id)!.drawn!.style;
+    expect(style).toMatch(/rounded=1/);
+    expect(style).toMatch(/absoluteArcSize=1/);
+    expect(Number(/arcSize=(\d+)/.exec(style)![1])).toBeGreaterThan(0);
+    expect(scene.nodes.find((n) => n.node.id === head.node.id)!.box.w).toBeCloseTo(head.box.w, 0);
   });
 
   it('gantt.puml: bars at their x positions, no warnings', async () => {

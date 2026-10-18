@@ -10,6 +10,18 @@ import type { Theme } from '../scene/theme.ts';
  * follow a dragged node for free.
  */
 
+/**
+ * How a tree grows. Defaults: mindmap spreads to both sides, WBS hangs from a top row. The source's own
+ * `top to bottom direction` (mindmap) and `left to right direction` (WBS) switch to a one-way tidy tree:
+ * `down` (root on top) or `right` (root at the left).
+ */
+export function treeGrowth(d: Diagram): 'down' | 'right' | undefined {
+  if (!d.directionFixed) return undefined;
+  if (d.family === 'mindmap' && d.direction === 'TB') return 'down';
+  if (d.family === 'wbs' && d.direction === 'LR') return 'right';
+  return undefined;
+}
+
 export const isTreeDiagram = (d: Diagram): boolean => (d.family === 'mindmap' || d.family === 'wbs') && d.nodes.length > 0 && !d.containers.length && d.nodes.every((n) => n.kind === 'topic');
 
 interface Tree {
@@ -48,9 +60,10 @@ export function subtreeIds(diagram: Diagram, id: string): string[] {
 export function treePositions(diagram: Diagram, shapes: Map<string, NodeShape>, theme: Theme): Positions {
   const tree = treeOf(diagram);
   const out: Positions = {};
+  const growth = treeGrowth(diagram);
   let top = 0;
   for (const root of tree.roots) {
-    const local = diagram.family === 'wbs' ? wbs(root, tree, shapes, theme) : mindmap(root, tree, shapes, theme);
+    const local = growth ? oneWay(root, tree, shapes, theme, growth) : diagram.family === 'wbs' ? wbs(root, tree, shapes, theme) : mindmap(root, tree, shapes, theme);
     const ys = [...local].map(([id, p]) => [p.y - shapes.get(id)!.h / 2, p.y + shapes.get(id)!.h / 2] as const);
     const lo = Math.min(...ys.map((y) => y[0]));
     const hi = Math.max(...ys.map((y) => y[1]));
@@ -105,7 +118,15 @@ function sides(root: DNode, tree: Tree): Map<string, 'left' | 'right'> {
   return out;
 }
 
-function mindmap(root: DNode, tree: Tree, shapes: Map<string, NodeShape>, theme: Theme): Map<string, { x: number; y: number }> {
+/** The mindmap's tidy tree with every branch on one side; `down` is the same tree turned a quarter, so boxes swap width and height. */
+function oneWay(root: DNode, tree: Tree, shapes: Map<string, NodeShape>, theme: Theme, growth: 'down' | 'right'): Map<string, { x: number; y: number }> {
+  if (growth === 'right') return mindmap(root, tree, shapes, theme, true);
+  const turned = new Map([...shapes].map(([id, s]) => [id, { ...s, w: s.h, h: s.w }]));
+  const local = mindmap(root, tree, turned, theme, true);
+  return new Map([...local].map(([id, p]) => [id, { x: p.y, y: p.x }]));
+}
+
+function mindmap(root: DNode, tree: Tree, shapes: Map<string, NodeShape>, theme: Theme, oneSide = false): Map<string, { x: number; y: number }> {
   const k = theme.scale;
   const size = (n: DNode) => shapes.get(n.id) ?? shapes.get(root.id)!;
   const h = (n: DNode) => size(n).h;
@@ -137,8 +158,8 @@ function mindmap(root: DNode, tree: Tree, shapes: Map<string, NodeShape>, theme:
   };
 
   const out = new Map<string, { x: number; y: number }>([[root.id, { x: 0, y: 0 }]]);
-  const assigned = sides(root, tree);
-  const explicit = (tree.kids.get(root.id) ?? []).some((n) => n.side);
+  const assigned = oneSide ? new Map((tree.kids.get(root.id) ?? []).map((n) => [n.id, 'right' as const])) : sides(root, tree);
+  const explicit = !oneSide && (tree.kids.get(root.id) ?? []).some((n) => n.side);
   for (const side of ['right', 'left'] as const) {
     const first = (tree.kids.get(root.id) ?? []).filter((n) => assigned.get(n.id) === side);
     if (!first.length) continue;
@@ -245,7 +266,14 @@ function elbow(pts: P[], radius: number): string {
  * parent's side to the child's (or top to bottom for a child dropped below). WBS: a bus under the root,
  * then a spine down the parent's left with an elbow into each child.
  */
-export function treeLine(family: 'mindmap' | 'wbs', a: Box, b: Box, opts: { fromRoot: boolean; boxless?: boolean; scale: number }): { points: P[]; path: string } {
+export function treeLine(family: 'mindmap' | 'wbs', a: Box, b: Box, opts: { fromRoot: boolean; boxless?: boolean; scale: number; growth?: 'down' | 'right' }): { points: P[]; path: string } {
+  if (family === 'wbs' && opts.growth === 'right') {
+    const start: P = [a.x + a.w, a.y + a.h / 2];
+    const end: P = [b.x, b.y + b.h / 2];
+    const midX = start[0] + Math.min(22 * opts.scale, (end[0] - start[0]) / 2); // one trunk per parent
+    const pts: P[] = Math.abs(start[1] - end[1]) < 0.5 ? [start, end] : [start, [midX, start[1]], [midX, end[1]], end];
+    return { points: pts, path: elbow(pts, 7 * opts.scale) };
+  }
   if (family === 'wbs') {
     const radius = 7 * opts.scale;
     if (opts.fromRoot || b.y <= a.y + a.h) {
@@ -267,7 +295,7 @@ export function treeLine(family: 'mindmap' | 'wbs', a: Box, b: Box, opts: { from
   let p3: P;
   let p1: P;
   let p2: P;
-  if (b.x >= a.x + a.w - 1 || b.x + b.w <= a.x + 1) {
+  if (opts.growth !== 'down' && (b.x >= a.x + a.w - 1 || b.x + b.w <= a.x + 1)) {
     const right = b.x >= a.x + a.w - 1;
     p0 = [right ? a.x + a.w : a.x, a.y + a.h / 2];
     p3 = [right ? b.x : b.x + b.w, y2];

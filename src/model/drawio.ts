@@ -44,8 +44,14 @@ function parseStyle(style: string | undefined): Style {
  * puml-layout's own style keys (draw.io keeps unknown keys), written by our
  * draw.io export: class flavour, stereotype and the label lines folded in
  * for draw.io's eyes (`pumlHead` lines above the name, `pumlTail` under it:
- * a `[technology]` line when `pumlTechnology` is set, then the description).
+ * a `[technology]` line when `pumlTechnology` is set, then the description),
+ * and `pumlKind`/`pumlExternal` for the C4 (and other) kinds draw.io only has a lookalike for.
  */
+/** Kinds draw.io has no shape for: our export draws an approximation and names the real kind in `pumlKind`. */
+export const APPROX_KINDS: ReadonlySet<string> = new Set([
+  'usecase', 'circle', 'initial', 'final', 'history', 'choice', 'decision', 'fork', 'storage', 'queue', 'person', 'artifact', 'collections', 'frame', 'state', 'topic', 'system', 'container',
+]);
+
 function readPumlKeys(style: Style, node: DNode): void {
   const v = (k: string) => style.values.get(k);
   const decode = (s: string) => {
@@ -66,6 +72,8 @@ function readPumlKeys(style: Style, node: DNode): void {
   if (under.length) node.description = under;
   if (v('pumlClassKind')) node.classKind = v('pumlClassKind') as ClassKind;
   if (v('pumlStereotype')) node.stereotype = decode(v('pumlStereotype')!);
+  if (v('pumlKind') && APPROX_KINDS.has(v('pumlKind')!)) node.kind = v('pumlKind') as NodeKind;
+  if (v('pumlExternal') === '1') node.external = true;
 }
 
 interface Cell {
