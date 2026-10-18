@@ -2,7 +2,7 @@ import type { Diagram } from '../../model/types.ts';
 import { nodeBox, type Box, type Positions } from '../../scene/containers.ts';
 import { nodeShape, type NodeShape } from '../../scene/shapes.ts';
 import { measureText } from '../../scene/measure.ts';
-import { cleanRings, hexEdgeX, hexGeometry, layeredBands, RING_ASPECT, ringCenter, templateMetrics, type TemplateMetrics } from '../../scene/template.ts';
+import { cleanRings, clearOfProfile, hexEdgeX, hexGeometry, layeredBands, profileBox, RING_ASPECT, ringCenter, ringProfile, templateMetrics, titleBlock, type TemplateMetrics } from '../../scene/template.ts';
 import type { Theme } from '../../scene/theme.ts';
 import type { LayerDef, TemplateSettings } from '../layout-file.ts';
 import { layersOf, resolveAssignments } from './defs.ts';
@@ -370,9 +370,6 @@ function placeHexagonal(ctx: Ctx): Positions {
 
 // ---- clean / onion ------------------------------------------------------------------------------
 
-/** How far a box reaches from its centre in direction θ, in ring space (squeezed horizontally by `RING_ASPECT`). */
-const reach = (s: NodeShape, theta: number) => Math.abs((s.w / 2 / RING_ASPECT) * Math.cos(theta)) + Math.abs((s.h / 2) * Math.sin(theta));
-
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 /** Circular mean of angles, undefined for none. */
@@ -381,22 +378,43 @@ function circularMean(angles: number[]): number | undefined {
   return Math.atan2(mean(angles.map(Math.sin)), mean(angles.map(Math.cos)));
 }
 
+/** A candidate arrangement of one ring: angles, the positions they give and the area of the ring's outline. */
+interface Arrangement {
+  thetas: number[];
+  at: { x: number; y: number }[];
+  area: number;
+  cost: number;
+}
+
 /**
- * Concentric rings inside out, each ring's members spread evenly round a
- * circle. The angular order follows the members' neighbours (the average
- * direction of what they connect to), rotated as a whole to match those
- * wishes best, so connected elements face each other across the rings. The
- * radius is the smallest that keeps the ring's members clear of the ring
- * inside and of each other.
+ * Concentric rings inside out. Each ring's members keep their angular order
+ * (the average direction of what they connect to, inner rings first, then all
+ * neighbours; the whole ring rotated to match best), but where they sit is
+ * chosen for the ring's size: every member sits as close to the ring inside as
+ * its own box allows at its angle (a wide box at the top or bottom costs only
+ * its height, at the sides its width), and the arrangement with the smallest
+ * outline wins, trading a little area for staying near the wished angles. The
+ * core ring (and the first ring with several members when the core is empty)
+ * stays evenly spaced on one circle because the rings' centre is its mean.
  */
 function placeClean(ctx: Ctx): Positions {
   const { m, layers } = ctx;
+  const A = RING_ASPECT;
   const at: Positions = {};
   const angle = new Map<string, number>();
   const hinted = Object.keys(ctx.hints).length > 0;
   const hintCenter = hinted ? ringCenter(layers, new Map(layers.map((l) => [l.id, ctx.members.get(l.id)!.filter((id) => ctx.hints[id]).map((id) => boxOf(ctx, id, ctx.hints[id]!))]))) : undefined;
+  // How much staying near the wished angles is worth: a re-place keeps the picture the user has.
+  const lambda = hinted ? 6 : 0.35;
+  const gap = m.nodeGap * 0.6 * ctx.spread;
+  const centreRing = (index: number) => {
+    const n = ctx.members.get(layers[index]!.id)!.length;
+    if (n < 2) return false;
+    return layers.slice(0, index).every((l, i) => (i === 0 ? ctx.members.get(l.id)!.length === 0 : ctx.members.get(l.id)!.length < 2));
+  };
+  const center: [number, number] = [0, 0];
 
-  const placeRing = (index: number, inner: number, wishOf: (id: string, k: number, n: number) => number) => {
+  const placeRing = (index: number, inner: number[] | undefined, search: boolean, wishOf: (id: string, k: number, n: number) => number) => {
     const ids = ctx.members.get(layers[index]!.id)!;
     const n = ids.length;
     if (!n) return;
@@ -405,25 +423,103 @@ function placeClean(ctx: Ctx): Positions {
       angle.set(ids[0]!, -Math.PI / 2);
       return;
     }
-    const wishes = ids.map((id, k) => ({ id, k, wish: wrapAngle(wishOf(id, k, n)) })).sort((a, b) => a.wish - b.wish || a.k - b.k);
+    const equal = centreRing(index);
+    const title = titleBlock(layers[index]!.label, ctx.theme);
+    const titleBox = { width: title.width, height: m.titleHeight };
+    const shapes = ids.map((id) => ctx.shapes.get(id)!);
+    const boxOfAt = (k: number, th: number, d: number): Box => nodeBox({ x: A * d * Math.cos(th), y: d * Math.sin(th) }, shapes[k]!);
+
+    // The smallest distance (squeezed) at which member k at angle th clears the ring inside.
+    const clearCache = new Map<string, number>();
+    const clearD = (k: number, th: number) => {
+      if (!inner) return 0;
+      const key = `${k}|${Math.round(th * 1000)}`;
+      const hit = clearCache.get(key);
+      if (hit !== undefined) return hit;
+      let lo = 0;
+      let hi = 40;
+      while (!clearOfProfile(boxOfAt(k, th, hi), center, inner, m.pad) && hi < 20000) (lo = hi), (hi *= 2);
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2;
+        if (clearOfProfile(boxOfAt(k, th, mid), center, inner, m.pad)) hi = mid;
+        else lo = mid;
+      }
+      clearCache.set(key, hi);
+      return hi;
+    };
+    const touching = (boxes: Box[]) => {
+      for (let i = 0; i < boxes.length; i++)
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i]!;
+          const b = boxes[j]!;
+          if (a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap) return true;
+        }
+      return false;
+    };
+    const arrange = (thetas: number[], wishes: number[]): Arrangement => {
+      let ds = thetas.map((th, k) => clearD(k, th));
+      if (equal) ds = ds.map(() => Math.max(...ds));
+      const boxesAt = (e: number) => thetas.map((th, k) => boxOfAt(k, th, ds[k]! + e));
+      let e = 0;
+      if (touching(boxesAt(0))) {
+        let lo = 0;
+        let hi = 16;
+        while (touching(boxesAt(hi)) && hi < 20000) (lo = hi), (hi *= 2);
+        for (let i = 0; i < 12; i++) {
+          const mid = (lo + hi) / 2;
+          if (touching(boxesAt(mid))) lo = mid;
+          else hi = mid;
+        }
+        e = hi;
+      }
+      const boxes = boxesAt(e);
+      const out = profileBox(ringProfile(boxes, center, inner, m, titleBox), center);
+      const dev = mean(thetas.map((th, k) => Math.abs(wrapAngle(th - wishes[k]!)))) / Math.PI;
+      const area = out.w * out.h;
+      return { thetas, at: thetas.map((th, k) => ({ x: A * (ds[k]! + e) * Math.cos(th), y: (ds[k]! + e) * Math.sin(th) })), area, cost: area * (1 + lambda * dev) };
+    };
+
+    const order = ids.map((id, k) => ({ k, wish: wrapAngle(wishOf(id, k, n)) })).sort((a, b) => a.wish - b.wish || a.k - b.k);
+    // Everything below works in ids order; `order` says which member is which place in the angular sequence.
+    const wishes = ids.map((_, k) => order.find((o) => o.k === k)!.wish);
     const step = (Math.PI * 2) / n;
-    // Rotation that best matches the wishes when the k-th sits at phi + k·step.
-    const phi = circularMean(wishes.map((w, k) => w.wish - k * step)) ?? -Math.PI / 2;
-    const thetas = wishes.map((_, k) => phi + k * step);
-    let r = 0;
-    wishes.forEach((w, k) => (r = Math.max(r, inner + (inner ? m.pad : 0) + reach(ctx.shapes.get(w.id)!, thetas[k]!))));
-    if (n > 1) {
-      for (let k = 0; k < n; k++) {
-        const a = wishes[k]!;
-        const b = wishes[(k + 1) % n]!;
-        const tangent = (thetas[k]! + thetas[(k + 1) % n]! + (k === n - 1 ? step * n : 0)) / 2 + Math.PI / 2;
-        const need = reach(ctx.shapes.get(a.id)!, tangent) + reach(ctx.shapes.get(b.id)!, tangent) + m.nodeGap * 0.6 * ctx.spread;
-        r = Math.max(r, need / (2 * Math.sin(Math.min(Math.PI / 2, step / 2))));
+    const phi0 = circularMean(order.map((o, k) => o.wish - k * step)) ?? -Math.PI / 2;
+    let best: Arrangement | undefined;
+    const consider = (a: Arrangement) => {
+      if (!best || a.cost < best.cost - 1e-6) best = a;
+    };
+    if (n === 1) {
+      consider(arrange([wishes[0]!], wishes));
+    } else {
+      const tries = !search ? 1 : equal ? 16 : 8;
+      for (let off = 0; off < tries; off++)
+        for (let shift = 0; shift < (equal || !search ? 1 : n); shift++) {
+          const thetas = new Array<number>(n);
+          order.forEach((o, k) => (thetas[o.k] = wrapAngle(phi0 + (off * step) / tries + ((k + shift) % n) * step)));
+          consider(arrange(thetas, wishes));
+        }
+      // Free angles: nudge members and swap neighbours while the outline shrinks.
+      for (let round = 0; search && !equal && round < 3 && best; round++) {
+        const before = best.cost;
+        for (let k = 0; k < n; k++)
+          for (const delta of [-0.25, -0.08, 0.08, 0.25]) {
+            const thetas = [...best.thetas];
+            thetas[k] = wrapAngle(thetas[k]! + delta);
+            consider(arrange(thetas, wishes));
+          }
+        for (let i = 0; i < n; i++)
+          for (let j = i + 1; j < n; j++) {
+            const thetas = [...best.thetas];
+            [thetas[i], thetas[j]] = [thetas[j]!, thetas[i]!];
+            consider(arrange(thetas, wishes));
+          }
+        if (best.cost > before - 1e-6) break;
       }
     }
-    wishes.forEach((w, k) => {
-      at[w.id] = { x: r * RING_ASPECT * Math.cos(thetas[k]!), y: r * Math.sin(thetas[k]!) };
-      angle.set(w.id, thetas[k]!);
+    const chosen = best!;
+    ids.forEach((id, k) => {
+      at[id] = chosen.at[k]!;
+      angle.set(id, chosen.thetas[k]!);
     });
   };
 
@@ -442,8 +538,8 @@ function placeClean(ctx: Ctx): Positions {
   // Inside out, each ring facing what it connects to further in; then again with every neighbour.
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < layers.length; i++) {
-      const inner = i ? (ringsNow()[i - 1]?.r ?? 0) : 0;
-      placeRing(i, inner, (id, k, n) => hintAngle(id) ?? neighbourAngle(id, (r) => (pass === 0 ? r < i : true)) ?? (angle.get(id) ?? even(k, n)));
+      const inner = i ? ringsNow()[i - 1]?.profile : undefined;
+      placeRing(i, inner, pass === 2, (id, k, n) => hintAngle(id) ?? neighbourAngle(id, (r) => (pass === 0 ? r < i : true)) ?? (angle.get(id) ?? even(k, n)));
     }
   }
   if (hintCenter) for (const p of Object.values(at)) (p.x += hintCenter[0]), (p.y += hintCenter[1]);

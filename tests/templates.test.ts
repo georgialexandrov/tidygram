@@ -18,7 +18,7 @@ import { DiagramSvg } from '../src/render/DiagramSvg.tsx';
 import { loadAvoid, type Avoid } from '../src/scene/avoid.ts';
 import { overlaps, type Box } from '../src/scene/containers.ts';
 import { buildScene, type Scene } from '../src/scene/scene.ts';
-import { cornerDistance, hexEdgeX, insideHex, RING_ASPECT } from '../src/scene/template.ts';
+import { boxOutline, cornerDistance, hexEdgeX, insideHex, RING_ASPECT, ringRadiusAt, ringStretch, squeezed } from '../src/scene/template.ts';
 import { THEMES } from '../src/scene/theme.ts';
 
 const require = createRequire(import.meta.url);
@@ -315,6 +315,30 @@ describe('template geometry', () => {
       }
       noOverlaps(scene);
     }
+  });
+
+  it('clean: rings follow their members (each member fully inside its band) and the whole template is much smaller than the even-circle one', () => {
+    for (const diagram of [CLEAN(), HEX(), LAYERED()]) {
+      const scene = sceneOf(diagram, applyTemplate(diagram, emptyLayout(), 'clean'));
+      const t = scene.template!;
+      const c = t.center!;
+      const pad = 20 * scene.theme.scale;
+      for (const n of scene.nodes) {
+        const ring = t.rings.find((r) => r.id === t.assigned.get(n.node.id))!;
+        for (const [x, y] of boxOutline(n.box, c, 16)) {
+          const [th, rho] = squeezed(x, y);
+          expect(rho, `${n.node.id} inside its ring`).toBeLessThanOrEqual(ringRadiusAt(ring.profile, th) - pad / ringStretch(th) + 0.5);
+          expect(rho, `${n.node.id} outside the ring within`).toBeGreaterThanOrEqual(ringRadiusAt(ring.innerProfile, th) + (ring.inner > 0 ? pad / ringStretch(th) : 0) - 2);
+        }
+      }
+      // Rings nest: each outline lies beyond the one inside it.
+      for (const r of t.rings) r.profile.forEach((rho, s) => expect(rho).toBeGreaterThan(r.innerProfile[s]!));
+      noOverlaps(scene);
+    }
+    // Rings used to be even circles round the members: 1791 × 995 for this diagram at the default size.
+    const diagram = CLEAN();
+    const b = sceneOf(diagram, applyTemplate(diagram, emptyLayout(), 'clean')).template!.bounds;
+    expect(b.w * b.h).toBeLessThan(0.8 * 1791 * 995);
   });
 
   it('renders every template in every theme, violations marked', () => {

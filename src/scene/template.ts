@@ -48,13 +48,17 @@ export const RING_ASPECT = 1.8;
 
 export interface TemplateRing {
   id: string;
-  /** Outer radius (vertical; the horizontal one is `RING_ASPECT` times it); the inner one is the previous ring's outer radius (0 for the core). */
+  /** Largest radius (vertical units; the horizontal one is `RING_ASPECT` times it). */
   r: number;
-  /** Vertical radius of the lower half (≤ `r`): a ring whose members sit high doesn't hang empty below them. */
+  /** Radius straight down. */
   rb: number;
   inner: number;
   /** The previous ring's `rb` (0 for the core). */
   innerB: number;
+  /** The outline: radius at `RING_SAMPLES` angles (see `ringProfile`); `r` is its largest, `rb` the one straight down, `inner` the smallest of the ring inside. */
+  profile: number[];
+  /** The previous ring's profile (zeros for the core). */
+  innerProfile: number[];
   fill: string;
   title: TemplateTitle;
 }
@@ -275,14 +279,130 @@ export function hexGeometry(layers: LayerDef[], members: Map<string, Box[]>, the
 
 // ---- clean / onion ------------------------------------------------------------------------------
 
-/** Farthest corner of a box from a point, in ring space: the radius a ring around that point needs to hold the box. */
-/** SVG path of a ring's outline: an ellipse whose lower half is `rb` deep instead of `r`. */
-export function ringPath(cx: number, cy: number, r: number, rb: number): string {
-  const rx = r * RING_ASPECT;
-  const n = (v: number) => Math.round(v * 10) / 10;
-  return `M${n(cx - rx)},${n(cy)} A${n(rx)},${n(r)} 0 0 1 ${n(cx + rx)},${n(cy)} A${n(rx)},${n(rb)} 0 0 1 ${n(cx - rx)},${n(cy)} Z`;
+/**
+ * A ring is a closed outline given by its radius at `RING_SAMPLES` angles, in
+ * the squeezed space (where rings are circles; sample s is at angle
+ * -π + s·2π/N, y down, so sample N/4 points straight up). The outline follows
+ * its members: it is only as deep as the members at that angle need, with a
+ * minimum thickness over the ring inside, and smoothed so it stays calm.
+ */
+export const RING_SAMPLES = 96;
+const STEP = (Math.PI * 2) / RING_SAMPLES;
+const STRETCH = Array.from({ length: RING_SAMPLES }, (_, s) => Math.sqrt(RING_ASPECT * RING_ASPECT * Math.cos(-Math.PI + s * STEP) ** 2 + Math.sin(-Math.PI + s * STEP) ** 2));
+
+/** Real pixels per unit of squeezed radius in direction θ. */
+export const ringStretch = (theta: number) => Math.sqrt(RING_ASPECT * RING_ASPECT * Math.cos(theta) ** 2 + Math.sin(theta) ** 2);
+
+/** A point's angle and distance from the centre, in squeezed space. */
+export const squeezed = (x: number, y: number): [number, number] => [Math.atan2(y, x / RING_ASPECT), Math.sqrt((x / RING_ASPECT) ** 2 + y * y)];
+
+/** The profile's radius at an angle (linear between samples). */
+export function ringRadiusAt(profile: number[], theta: number): number {
+  const f = (((theta + Math.PI) / STEP) % RING_SAMPLES + RING_SAMPLES) % RING_SAMPLES;
+  const i = Math.floor(f);
+  const t = f - i;
+  return profile[i]! * (1 - t) + profile[(i + 1) % RING_SAMPLES]! * t;
 }
 
+/** Points all round a box (centre-relative, real pixels): corners, edges in steps, and the point nearest the centre. */
+export function boxOutline(b: Box, [cx, cy]: Point, per = 4): Point[] {
+  const out: Point[] = [];
+  for (let i = 0; i <= per; i++) {
+    const x = b.x - cx + (b.w * i) / per;
+    const y = b.y - cy + (b.h * i) / per;
+    out.push([x, b.y - cy], [x, b.y + b.h - cy], [b.x - cx, y], [b.x + b.w - cx, y]);
+  }
+  out.push([Math.max(b.x, Math.min(cx, b.x + b.w)) - cx, Math.max(b.y, Math.min(cy, b.y + b.h)) - cy]);
+  return out;
+}
+
+/** Biggest and smallest radius of a profile. */
+const span = (profile: number[]) => [Math.min(...profile), Math.max(...profile)] as const;
+
+/** Box of a profile's outline around a centre. */
+export function profileBox(profile: number[], [cx, cy]: Point): Box {
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  profile.forEach((rho, s) => {
+    const th = -Math.PI + s * STEP;
+    x0 = Math.min(x0, rho * RING_ASPECT * Math.cos(th));
+    x1 = Math.max(x1, rho * RING_ASPECT * Math.cos(th));
+    y0 = Math.min(y0, rho * Math.sin(th));
+    y1 = Math.max(y1, rho * Math.sin(th));
+  });
+  return { x: cx + x0, y: cy + y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** Does a box keep `pad` real pixels clear of the inside of a profile (every point of its outline beyond it)? */
+export function clearOfProfile(b: Box, center: Point, profile: number[], pad: number): boolean {
+  for (const [x, y] of boxOutline(b, center)) {
+    const [th, rho] = squeezed(x, y);
+    if (rho < ringRadiusAt(profile, th) + pad / ringStretch(th) - 1e-6) return false;
+  }
+  return true;
+}
+
+/**
+ * The outline of a ring holding `boxes` around `center`: each member's padded
+ * outline pushes the radius out at its angles; never thinner than `thickness`
+ * over the ring inside; room for the title over members under it. Widened a
+ * little either side and averaged, which never goes under the need.
+ */
+export function ringProfile(boxes: Box[], center: Point, inner: number[] | undefined, m: TemplateMetrics, title?: { width: number; height: number }): number[] {
+  const need = new Array<number>(RING_SAMPLES);
+  for (let s = 0; s < RING_SAMPLES; s++) need[s] = (inner ? inner[s]! : 0) + m.empty / STRETCH[s]!;
+  const raise = (s: number, v: number) => {
+    const i = ((s % RING_SAMPLES) + RING_SAMPLES) % RING_SAMPLES;
+    if (v > need[i]!) need[i] = v;
+  };
+  for (const b of boxes) {
+    for (const [x, y] of boxOutline(b, center)) {
+      const [th, rho] = squeezed(x, y);
+      const v = rho + m.pad / ringStretch(th);
+      const f = (th + Math.PI) / STEP;
+      raise(Math.floor(f), v);
+      raise(Math.ceil(f), v);
+    }
+    // The title sits at the top centre: members under it need it clear above them.
+    if (title && b.y < center[1] && Math.abs(b.x + b.w / 2 - center[0]) < title.width / 2 + b.w / 2 + m.pad) {
+      const room = center[1] - b.y + title.height + m.pad * 1.5;
+      const half = title.width / 2 + m.pad;
+      for (let s = RING_SAMPLES / 4 - 24; s <= RING_SAMPLES / 4 + 24; s++) {
+        const th = -Math.PI + s * STEP;
+        const up = -Math.sin(th);
+        if (up < 0.2) continue;
+        const rho = room / up;
+        if (rho * Math.abs(Math.cos(th)) * RING_ASPECT <= half) raise(s, rho);
+      }
+    }
+  }
+  // Widened by 2W, then averaged twice over ±W: each average stays at or above the need, and the outline loses its corners.
+  const W = 5;
+  const at = (v: number[], s: number) => v[(s + RING_SAMPLES * 4) % RING_SAMPLES]!;
+  const wide = need.map((_, s) => Math.max(...Array.from({ length: 4 * W + 1 }, (_, k) => at(need, s + k - 2 * W))));
+  const blur = (v: number[]) => v.map((_, s) => Array.from({ length: 2 * W + 1 }, (_, k) => at(v, s + k - W)).reduce((a, b) => a + b, 0) / (2 * W + 1));
+  return blur(blur(wide));
+}
+
+/** SVG path of a ring's outline (a smooth closed curve through the profile). */
+export function ringOutline(center: Point, profile: number[]): string {
+  const n = (v: number) => Math.round(v * 10) / 10;
+  const p = (s: number): Point => {
+    const i = ((s % RING_SAMPLES) + RING_SAMPLES) % RING_SAMPLES;
+    const th = -Math.PI + i * STEP;
+    return [center[0] + profile[i]! * RING_ASPECT * Math.cos(th), center[1] + profile[i]! * Math.sin(th)];
+  };
+  let d = `M${n(p(0)[0])},${n(p(0)[1])}`;
+  for (let s = 0; s < RING_SAMPLES; s++) {
+    const [p0, p1, p2, p3] = [p(s - 1), p(s), p(s + 1), p(s + 2)];
+    d += ` C${n(p1[0] + (p2[0] - p0[0]) / 6)},${n(p1[1] + (p2[1] - p0[1]) / 6)} ${n(p2[0] - (p3[0] - p1[0]) / 6)},${n(p2[1] - (p3[1] - p1[1]) / 6)} ${n(p2[0])},${n(p2[1])}`;
+  }
+  return `${d} Z`;
+}
+
+/** Farthest corner of a box from a point, in ring space: the radius a ring around that point needs to hold the box. */
 export function cornerDistance(box: Box, [cx, cy]: Point): number {
   const dx = Math.max(Math.abs(box.x - cx), Math.abs(box.x + box.w - cx)) / RING_ASPECT;
   const dy = Math.max(Math.abs(box.y - cy), Math.abs(box.y + box.h - cy));
@@ -306,33 +426,31 @@ export function ringCenter(layers: LayerDef[], members: Map<string, Box[]>): Poi
   return all.length ? mean(all) : undefined;
 }
 
-/** Concentric rings inside out; each holds its members' boxes with padding and room for its title at the top. */
+/** Concentric rings inside out; each follows its members' boxes (padded), with room for its title at the top only where members sit under it. */
 export function cleanRings(layers: LayerDef[], members: Map<string, Box[]>, theme: Theme, center = ringCenter(layers, members)): TemplateRing[] {
   if (!center) return [];
   const m = templateMetrics(theme);
   const rings: TemplateRing[] = [];
-  let r = 0;
-  let rb = 0;
+  let innerProfile: number[] | undefined;
   layers.forEach((l, i) => {
     const boxes = members.get(l.id) ?? [];
-    const inner = r;
-    const innerB = rb;
-    const reach = boxes.length ? Math.max(...boxes.map((b) => cornerDistance(b, center))) : 0;
     const text = titleBlock(l.label, theme);
-    // The title needs room only at the top, over the members below it; elsewhere the padding is enough.
-    const under = boxes.filter((b) => Math.abs(b.x + b.w / 2 - center[0]) < text.width / 2 + b.w / 2 + m.pad && b.y < center[1]);
-    const titleRoom = under.length ? Math.max(...under.map((b) => center[1] - b.y)) + m.titleHeight + m.pad * 1.5 : 0;
-    r = Math.max(inner + m.empty, boxes.length ? Math.max(reach + m.pad, titleRoom) : 0);
-    // The lower half only as deep as the members below the centre need (each corner, padded, inside the half-ellipse).
-    rb = innerB + m.empty;
-    for (const b of boxes) {
-      const dy = b.y + b.h + m.pad - center[1];
-      if (dy <= 0) continue;
-      const dx = Math.max(Math.abs(b.x - m.pad - center[0]), Math.abs(b.x + b.w + m.pad - center[0])) / (r * RING_ASPECT);
-      rb = Math.max(rb, dx >= 0.98 ? r : dy / Math.sqrt(1 - dx * dx));
-    }
-    rb = Math.min(r, rb);
-    rings.push({ id: l.id, r, rb, inner, innerB, fill: fillAt(theme, layers.length - 1 - i, layers.length), title: { text, x: center[0], y: center[1] - r + m.pad * 0.5, align: 'middle' } });
+    const profile = ringProfile(boxes, center, innerProfile, m, { width: text.width, height: m.titleHeight });
+    const [, r] = span(profile);
+    const [innerMin] = innerProfile ? span(innerProfile) : [0];
+    const down = RING_SAMPLES * 0.75;
+    rings.push({
+      id: l.id,
+      r,
+      rb: profile[down]!,
+      inner: innerMin,
+      innerB: innerProfile ? innerProfile[down]! : 0,
+      profile,
+      innerProfile: innerProfile ?? new Array<number>(RING_SAMPLES).fill(0),
+      fill: fillAt(theme, layers.length - 1 - i, layers.length),
+      title: { text, x: center[0], y: center[1] - profile[RING_SAMPLES / 4]! + m.pad * 0.5, align: 'middle' },
+    });
+    innerProfile = profile;
   });
   return rings;
 }
@@ -367,7 +485,7 @@ export function buildTemplateScene(diagram: Diagram, template: TemplateSettings,
     scene.center = ringCenter(layers, members);
     scene.rings = cleanRings(layers, members, theme, scene.center);
     const outer = scene.rings.at(-1);
-    if (outer && scene.center) parts.push({ x: scene.center[0] - outer.r * RING_ASPECT, y: scene.center[1] - outer.r, w: outer.r * 2 * RING_ASPECT, h: outer.r + outer.rb });
+    if (outer && scene.center) parts.push(profileBox(outer.profile, scene.center));
   }
   parts.push(...scene.bands.map((b) => b.box));
   scene.bounds = union(parts) ?? scene.bounds;
@@ -394,8 +512,9 @@ export function regionAt(t: TemplateScene, [x, y]: Point, portBand = 0): string 
     if (!t.center || !t.rings.length) return undefined;
     const dx = (x - t.center[0]) / RING_ASPECT;
     const dy = y - t.center[1];
-    // In units of each ring's radius (the lower half has its own).
-    return (t.rings.find((r) => Math.hypot(dx / r.r, dy / (dy > 0 ? r.rb : r.r)) < 1) ?? t.rings.at(-1)!).id;
+    const th = Math.atan2(dy, dx);
+    const rho = Math.hypot(dx, dy);
+    return (t.rings.find((r) => rho < ringRadiusAt(r.profile, th)) ?? t.rings.at(-1)!).id;
   }
   const outer = t.hexagons[0];
   if (!outer) return undefined;

@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { hexPoints, ringPath, type TemplateScene, type TemplateTitle } from '../scene/template.ts';
+import { hexPoints, ringOutline, type TemplateScene, type TemplateTitle } from '../scene/template.ts';
 import type { Theme } from '../scene/theme.ts';
 import { f, Text } from './text.tsx';
 
@@ -35,7 +35,7 @@ function TemplateBackdropImpl({ t, theme }: { t: TemplateScene; theme: Theme }) 
         // Outermost first, so each inner ring paints over the one around it.
         [...t.rings].reverse().map((r) => (
           <g key={r.id} data-layer={r.id}>
-            <path d={ringPath(t.center![0], t.center![1], r.r, r.rb)} fill={r.fill} stroke={c.layerStroke} strokeWidth={1} />
+            <path d={ringOutline(t.center!, r.profile)} fill={r.fill} stroke={c.layerStroke} strokeWidth={1} />
           </g>
         ))}
       {t.center && t.rings.map((r) => <Title key={r.id} t={r.title} theme={theme} />)}
@@ -64,12 +64,11 @@ export function TemplateHighlight({ t, layer, color }: { t: TemplateScene; layer
   }
   const ring = t.rings.find((r) => r.id === layer);
   if (ring && t.center) {
-    const [cx, cy] = t.center;
     // The annulus: outer and inner outline.
     return (
       <g data-drop={layer}>
-        <path d={ringPath(cx, cy, ring.r, ring.rb)} {...stroke} />
-        {ring.inner > 0 && <path d={ringPath(cx, cy, ring.inner, ring.innerB)} {...stroke} />}
+        <path d={ringOutline(t.center, ring.profile)} {...stroke} />
+        {ring.inner > 0 && <path d={ringOutline(t.center, ring.innerProfile)} {...stroke} />}
       </g>
     );
   }
