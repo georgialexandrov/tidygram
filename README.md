@@ -378,7 +378,7 @@ What the themes share (everything but `classic`):
   Heads scale with the line weight: a slim notched arrow, hollow triangles
   and diamonds with mitred joins, crow's feet. Multiplicities have a halo.
 - **Colour that means something**: C4 people solid accent, internal
-  systems/containers accent tint, external grey, with a Structurizr-style
+  systems/containers accent tint, external grey, with a
   type line (`Container · NestJS`); ArchiMate elements get their layer's
   tint (business yellow, application blue, technology green, ...) and the
   ArchiMate type glyph in the corner instead of a `«stereotype»` line.

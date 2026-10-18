@@ -1,7 +1,7 @@
 /*
  * puml-layout editor chrome.
- * instrument panel: a warm-grey instrument panel, black type, one
- * signal orange for the primary action, signal blue and yellow only as
+ * A warm-grey instrument panel, black type, one signal orange for the
+ * primary action, blue and yellow only as
  * state signals (working / warning). Circle = lamp, square = stop/error,
  * triangle = warning or "opens". Everything sits on a 4px grid.
  */
@@ -23,7 +23,7 @@
   --rule-strong: #a8a49a;
 
   /* Signals */
-  --signal: #cc4116; /* Braun orange-red: the one primary action, the active line */
+  --signal: #cc4116; /* Orange-red: the one primary action, the active line */
   --signal-down: #a8340f;
   --signal-wash: #f6e2d9;
   --blue: #1f4e9c; /* working, focus, selection */
@@ -286,7 +286,7 @@ body,
   cursor: default;
 }
 
-/* Keyboard focus: a Primary-blue ring, never removed. */
+/* Keyboard focus: a blue ring, never removed. */
 :focus {
   outline: none;
 }
@@ -1162,7 +1162,7 @@ button.link {
   display: none;
 }
 
-/* Labelled rows: Futura small caps on the left, controls on the right. */
+/* Labelled rows: small caps on the left, controls on the right. */
 .field {
   display: grid;
   grid-template-columns: 64px auto;

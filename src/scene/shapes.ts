@@ -376,7 +376,7 @@ const C4_WORD: Partial<Record<NodeKind, string>> = { person: 'Person', system: '
 
 /**
  * The C4 type line. PlantUML's C4 shows `[technology]`; the modern themes
- * show the element type with it, as Structurizr does (`Container · NestJS`),
+ * show the element type with it, as C4 tools do (`Container · NestJS`),
  * because in a slide the type is what tells a person from a system.
  */
 export function c4Caption(node: DNode, theme: Theme): string | undefined {

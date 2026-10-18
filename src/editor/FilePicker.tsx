@@ -2,7 +2,7 @@ import { memo, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Popover } from './Popover.tsx';
 import { FORMAT_BADGE, filterFiles, formatOf, groupByFolder } from './selection.ts';
 
-/** Format badge: Futura caps in a hairline box, the same width for all three so names line up. */
+/** Format badge: label-font caps in a hairline box, the same width for all three so names line up. */
 export function FormatBadge({ path }: { path: string }) {
   const format = formatOf(path);
   return (
