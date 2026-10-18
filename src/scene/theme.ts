@@ -1,4 +1,5 @@
 import type { ViewSettings } from '../layout/layout-file.ts';
+import { PAPER_WEB_FONTS, type WebFont } from './fonts.ts';
 
 /**
  * Visual themes. `classic` mirrors PlantUML (crisper). The others follow
@@ -22,6 +23,8 @@ export interface Theme {
   font: string;
   /** Width of the theme's font relative to the Helvetica table used for measuring. */
   widthFactor: number;
+  /** Faces to load from Google Fonts when the theme's fonts aren't installed (editor `<link>`, embedded in exports). */
+  webFonts?: WebFont[];
   size: { node: number; note: number; edge: number; container: number; actor: number };
   nodeWeight?: number;
   actor: { style: 'stick' | 'avatar'; w: number; h: number; showStereotype: boolean };
@@ -651,7 +654,9 @@ function paperTheme(name: string, label: string, t: PaperTokens): Theme {
     },
     {
       font: PAPER_SANS,
-      widthFactor: 1.07,
+      // Geist against the Helvetica table, measured in Chrome (scripts/measure-font.ts): 1.00 at 600 (labels, table bold included), 1.03 at 400.
+      widthFactor: 1.02,
+      webFonts: PAPER_WEB_FONTS,
       size: { node: 12, note: 11, edge: 9, container: 8, actor: 11 },
       nodeWeight: 600,
       usecase: 'pill',

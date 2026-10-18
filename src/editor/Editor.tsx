@@ -19,7 +19,9 @@ import { sourceItems } from '../model/items.ts';
 import type { Avoid } from '../scene/avoid.ts';
 import { ancestry, type Box } from '../scene/containers.ts';
 import { FRAME_PRESETS, frameRect } from '../scene/frame.ts';
-import { THEMES, themeFor } from '../scene/theme.ts';
+import { THEMES, themeFor, themeOf } from '../scene/theme.ts';
+import { embeddedFontCss, memoFetcher } from '../scene/fonts.ts';
+import { useWebFonts } from './webFonts.ts';
 import { fitToFrame } from '../layout/fit.ts';
 import { largestScale } from '../layout/scale.ts';
 import { convert, formatOf as sourceFormatOf, TARGET_EXTENSION, type ConvertResult, type ConvertTarget } from '../convert/index.ts';
@@ -251,6 +253,8 @@ function descendants(diagram: Diagram, container: string): string[] {
   return diagram.nodes.filter((n) => n.parent && ids.has(n.parent)).map((n) => n.id);
 }
 
+const browserFonts = memoFetcher();
+
 export function Editor({ avoid }: { avoid: Avoid }) {
   const [files, setFiles] = useState<string[]>([]);
   const [file, setFile] = useState<string | null>(() => new URLSearchParams(location.search).get('file'));
@@ -442,6 +446,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     return () => hot.off('puml:changed', handler);
   }, [load]);
 
+  const fontsReady = useWebFonts(themeOf(layout.view).webFonts);
   const scene: AnyScene | null = useMemo(() => {
     if (!doc) return null;
     try {
@@ -456,7 +461,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       console.error(e);
       return null;
     }
-  }, [doc, layout, avoid]);
+  }, [doc, layout, avoid, fontsReady]);
 
   // Time from the input event to the DOM being updated, and to the next painted frame.
   useLayoutEffect(() => {
@@ -1005,15 +1010,16 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     window.setTimeout(() => setBusy((b) => (b === message ? null : b)), 3000);
   }, []);
 
-  const exportSvg = useCallback(() => {
+  const exportSvg = useCallback(async () => {
     if (!scene) return;
-    download(new Blob([renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} />)], { type: 'image/svg+xml' }), `${baseName}.svg`);
+    const fontCss = await embeddedFontCss(scene.theme.webFonts, browserFonts);
+    download(new Blob([renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} fontCss={fontCss} />)], { type: 'image/svg+xml' }), `${baseName}.svg`);
   }, [scene, frame, baseName]);
 
   /** PNG at up to 2x, rasterised by the browser from the same SVG the SVG export writes. */
   const exportPng = useCallback(async () => {
     if (!scene) return;
-    const markup = renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} />);
+    const markup = renderToStaticMarkup(<DiagramSvg scene={scene} frame={frame} fontCss={await embeddedFontCss(scene.theme.webFonts, browserFonts)} />);
     const img = new Image();
     img.src = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
     try {
