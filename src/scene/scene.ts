@@ -14,6 +14,8 @@ import { ROUTING, routeEdges, type RouteShape } from './route.ts';
 /** A container wall for the router: how far it reaches outside and inside the border (see `wallsFor`). */
 const WALL = { outer: 7, inner: 8, top: 3 };
 import { themeOf, type Theme } from './theme.ts';
+import { treeScene } from './tree-scene.ts';
+import { isTreeDiagram } from '../layout/tree.ts';
 import { buildTemplateScene, nudgeRingTitles, type TemplateScene } from './template.ts';
 
 export interface SceneNode {
@@ -50,6 +52,8 @@ export interface SceneEdge {
   tail: ArrowHead;
   dashed: boolean;
   via: Point[];
+  /** Tree diagrams (mindmap, WBS): the line as an SVG path (curve or elbow); it is not routed. */
+  path?: string;
   /** `offset` is from the line's middle: the user's, or where placement put it (the start of a label drag). */
   label?: { text: TextBlock; x: number; y: number; offset?: Point };
   /** Labels at the ends (multiplicities). */
@@ -157,6 +161,8 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     const b = containerBox.get(id)!;
     return [b.x + b.w / 2, b.y + b.h / 2];
   };
+  // Mindmaps and WBS: lines come straight from the boxes, no router.
+  if (isTreeDiagram(diagram) && !layout.template) return treeScene(diagram, theme, nodes, visible);
   const template: TemplateScene | undefined = layout.template
     ? (options.frozenTemplate ?? buildTemplateScene(diagram, layout.template, new Map(nodes.map((n) => [n.node.id, n.box])), theme))
     : undefined;

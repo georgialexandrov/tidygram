@@ -10,6 +10,7 @@ import { loadedAvoid } from '../scene/avoid.ts';
 import { pathLength } from '../scene/geometry.ts';
 import { countCrossings, measureQuality } from '../scene/quality.ts';
 import { buildScene } from '../scene/scene.ts';
+import { isTreeDiagram, treePositions } from './tree.ts';
 import { refreshTemplate, relayoutTemplate } from './template/index.ts';
 import { isUseCaseDiagram, useCaseLayouts } from './usecase.ts';
 
@@ -230,6 +231,7 @@ const TARGET = { max: 16 / 9 };
  * Mermaid direction) keeps its direction; only wrapping may reshape it.
  */
 export async function autoPositions(diagram: Diagram, shapes: Map<string, NodeShape>, theme: Theme, view?: LayoutFile['view']): Promise<Positions> {
+  if (isTreeDiagram(diagram)) return treePositions(diagram, shapes, theme);
   // draw.io lanes (titled `swimlane` containers side by side at the top level) are laid out as swimlane
   // columns; as ordinary containers ELK strings them out in one long row.
   const topLanes = diagram.containers.filter((c) => c.kind === 'lane' && !c.parent);

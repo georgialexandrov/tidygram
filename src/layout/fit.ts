@@ -11,6 +11,7 @@ import { scaledTheme, themeFor, themeOf, type Theme } from '../scene/theme.ts';
 import { containerPad } from '../scene/shapes.ts';
 import { largestScale } from './scale.ts';
 import { elkPositions, shapesFor } from './auto.ts';
+import { isTreeDiagram, treePositions } from './tree.ts';
 import { chosenEnds, type LayoutFile, type Point } from './layout-file.ts';
 import { settleTemplate } from './template/index.ts';
 import { buildTemplateScene } from '../scene/template.ts';
@@ -85,6 +86,11 @@ function candidates(diagram: Diagram, base: Theme, view: LayoutFile['view']): Ca
   for (const scale of SCALES) {
     const theme = scaledTheme(base, scale, view?.text ?? 1, view?.icons ?? 1);
     const shapes = shapesFor(diagram, theme);
+    // Trees keep their own arrangement: only the size varies.
+    if (isTreeDiagram(diagram)) {
+      list.push({ name: `tree, size ${Math.round(scale * 100)}%`, scale, shapes, theme, run: async () => treePositions(diagram, shapes, theme) });
+      continue;
+    }
     for (const direction of ['RIGHT', 'DOWN'] as const) {
       for (const spacing of SPACINGS) {
         list.push({

@@ -559,6 +559,11 @@ function mindmapBranches(scene: Scene): { depth: Map<string, number>; curves: Ma
     const a = byId.get(e.edge.from);
     const b = byId.get(e.edge.to);
     if (a?.node.kind !== 'topic' || b?.node.kind !== 'topic' || e.via.length) continue;
+    if (e.path) {
+      const lv = depth.get(b.node.id) ?? 1;
+      curves.set(e.edge.id, { d: e.path, w: lv <= 1 ? lw * 2 : lv === 2 ? lw * 1.4 : lw });
+      continue;
+    }
     const A = a.box;
     const B = b.box;
     const level = depth.get(b.node.id) ?? 1;

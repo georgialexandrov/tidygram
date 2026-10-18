@@ -111,6 +111,8 @@ export interface DNode {
   sourceBox?: SourceBox;
   /** Label may wrap to the box width (draw.io `whiteSpace=wrap`); only with `sourceBox`. */
   wrap?: boolean;
+  /** Mindmap first-level branch: the side of the root it was written on (`+` / `-`, `left side` / `right side`). */
+  side?: 'left' | 'right';
   line: number;
 }
 

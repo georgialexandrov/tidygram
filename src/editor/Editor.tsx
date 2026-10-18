@@ -3,6 +3,7 @@ import { perf } from './perf.ts';
 import { SourcePanel } from './SourcePanel.tsx';
 import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { subtreeIds } from '../layout/tree.ts';
 import { ensureLayout, hasSourceLayout, type LayoutMode } from '../layout/auto.ts';
 import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout, type LayoutFile, type Point, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
 import { applyTemplate, dropIntoTemplate, removeTemplate, settleTemplate, unassigned } from '../layout/template/index.ts';
@@ -543,7 +544,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       const selection = clickSelect(selNodes, id, e.shiftKey || e.metaKey || e.ctrlKey, multi);
       setSelNodes(selection);
       setSelEdge(undefined);
-      if (selection.has(id)) startNodeDrag([...selection], id, e);
+      // A mindmap / WBS topic carries its branch along.
+      if (selection.has(id)) startNodeDrag(doc ? [...new Set([...selection].flatMap((s) => subtreeIds(doc.diagram, s)))] : [...selection], id, e);
     },
     onContainerDown(id, e) {
       if (e.button !== 0 || !doc || spaceHeld.current) return;

@@ -1,0 +1,21 @@
+@startwbs
+* Website relaunch
+** Discovery
+*** Stakeholder interviews
+*** Analytics review
+*** Competitor audit
+** Design
+*** Information architecture
+*** Visual identity
+**** Colour and type
+**** Component library
+*** Prototype
+** Build
+*** Front end
+*** Content migration
+*** Search
+** Launch
+*** QA and accessibility
+*** Redirect plan
+*** Go-live checklist
+@endwbs

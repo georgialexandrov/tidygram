@@ -58,6 +58,7 @@ const LOSSES: Record<string, string[]> = {
   'json.puml → puml': ['class kind json→object'],
   'json.puml → mermaid': ['class kind json→class'],
   'mindmap.puml → drawio': ['node kind topic→action'],
+  'wbs.puml → drawio': ['node kind topic→action'],
   'nwdiag.puml → puml': ['description', 'node kind network→rectangle'],
   'nwdiag.puml → mermaid': ['edge end labels', 'node kind network→rectangle'],
   'nwdiag.puml → drawio': ['node kind network→rectangle'],
