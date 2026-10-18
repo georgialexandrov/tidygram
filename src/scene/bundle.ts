@@ -4,6 +4,7 @@ import type { AttachSide } from '../layout/layout-file.ts';
 import { attachOutline } from './attach.ts';
 import type { Box } from './containers.ts';
 import type { AnchorShape } from './geometry.ts';
+import { countCrossings } from './quality.ts';
 
 /**
  * Bundled lines. An element with several lines into a container (an actor
@@ -21,11 +22,11 @@ import type { AnchorShape } from './geometry.ts';
  *
  * Tried and dropped (2026-10-18): a trunk per source and container to a
  * shared door on the container's border, then branches fanning out inside
- * (food-delivery: bends 84 -> 110, crossings 33 -> 41). Packages leave no
+ * (food-delivery: bends 84 -> 110, crossings per line pair 33 -> 41). Packages leave no
  * room between their border and the first column of use cases, so the fan
  * ran through the gaps between rows and came at each use case from above or
  * below. Merging in the gap outside, each line through its own door, gives
- * 84 -> 74 bends. And a post-pass that rebuilt routed lines into bundles
+ * bends 84 -> 77, jogs 6 -> 1, crossings 30 -> 22 (once per spot). And a post-pass that rebuilt routed lines into bundles
  * (branch `usecase-bundle-prototype`) left the comb inside the boundary.
  */
 
@@ -123,26 +124,11 @@ export function portAt(a: AnchorShape, box: Box, end: Point, next: Point, buffer
 }
 
 /**
- * How busy a set of drawn lines looks: bends, plus crossings counted once
- * per spot (bundled lines cross another line at one spot, and that reads as
- * one crossing however many lines the bundle holds). A crossing weighs as
- * much as three bends. Used to keep the bundled routing only where it helps.
+ * How busy a set of drawn lines looks: bends, plus crossings (counted once
+ * per spot, so a line crossing a bundle crosses it once), a crossing
+ * weighing as much as three bends. Used to keep the bundled routing only
+ * where it helps.
  */
 export function busyness(lines: Point[][]): number {
-  let bends = 0;
-  const horizontal: [number, number, number][] = [];
-  const vertical: [number, number, number][] = [];
-  for (const pts of lines) {
-    bends += Math.max(0, pts.length - 2);
-    for (let i = 1; i < pts.length; i++) {
-      const [a, b] = [pts[i - 1]!, pts[i]!];
-      if (Math.abs(a[1] - b[1]) < 0.5) horizontal.push([Math.min(a[0], b[0]), Math.max(a[0], b[0]), a[1]]);
-      else if (Math.abs(a[0] - b[0]) < 0.5) vertical.push([Math.min(a[1], b[1]), Math.max(a[1], b[1]), a[0]]);
-    }
-  }
-  const spots = new Set<string>();
-  for (const [x0, x1, y] of horizontal) {
-    for (const [y0, y1, x] of vertical) if (x > x0 + 0.5 && x < x1 - 0.5 && y > y0 + 0.5 && y < y1 - 0.5) spots.add(`${Math.round(x)},${Math.round(y)}`);
-  }
-  return bends + 3 * spots.size;
+  return lines.reduce((n, pts) => n + Math.max(0, pts.length - 2), 0) + 3 * countCrossings(lines);
 }

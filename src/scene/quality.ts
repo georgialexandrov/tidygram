@@ -211,7 +211,11 @@ function onOutline(line: Point[], a: Parameters<typeof inside>[0]): boolean {
   return !inside(a, back) && inside(a, step);
 }
 
-/** Number of proper crossings between the orthogonal segments of different lines. */
+/**
+ * Number of proper crossings between the orthogonal segments of different
+ * lines, counted once per spot: lines bundled together (see bundle.ts) are
+ * drawn on top of each other, and a line crossing the bundle crosses it once.
+ */
 export function countCrossings(lines: Point[][]): number {
   type Seg = { a: Point; b: Point; line: number };
   const horizontal: Seg[] = [];
@@ -224,7 +228,7 @@ export function countCrossings(lines: Point[][]): number {
       else if (Math.abs(a[0] - b[0]) < 0.5) vertical.push({ a, b, line });
     }
   });
-  let crossings = 0;
+  const spots = new Set<string>();
   for (const h of horizontal) {
     const [x0, x1] = [Math.min(h.a[0], h.b[0]), Math.max(h.a[0], h.b[0])];
     const y = h.a[1];
@@ -232,8 +236,8 @@ export function countCrossings(lines: Point[][]): number {
       if (v.line === h.line) continue;
       const x = v.a[0];
       const [y0, y1] = [Math.min(v.a[1], v.b[1]), Math.max(v.a[1], v.b[1])];
-      if (x > x0 + 0.5 && x < x1 - 0.5 && y > y0 + 0.5 && y < y1 - 0.5) crossings++;
+      if (x > x0 + 0.5 && x < x1 - 0.5 && y > y0 + 0.5 && y < y1 - 0.5) spots.add(`${Math.round(x * 2)},${Math.round(y * 2)}`);
     }
   }
-  return crossings;
+  return spots.size;
 }
