@@ -1,4 +1,4 @@
-import type { LayoutFile, Point } from '../layout/layout-file.ts';
+import { bandsKind, type LayoutFile, type Point } from '../layout/layout-file.ts';
 import { APPROX_KINDS, parseDrawio } from '../model/drawio.ts';
 import type { ArrowHead, ClassKind, DNode, Diagram, NodeKind, ParseWarning } from '../model/types.ts';
 import type { AnyScene } from '../scene/any.ts';
@@ -228,7 +228,7 @@ function templateCells(t: TemplateScene, theme: Theme, fresh: (base: string) => 
   const label = (id: string) => t.layers.find((l) => l.id === id)?.label ?? id;
   const out = [`<mxCell id="${attr(layer)}" value="Template" style="locked=1;pumlTemplate=1;" parent="0" />`];
   for (const b of t.bands) {
-    const align = t.kind === 'layered' ? 'align=left;verticalAlign=middle;spacingLeft=12;' : 'align=center;verticalAlign=top;spacingTop=8;';
+    const align = bandsKind(t.kind) ? 'align=left;verticalAlign=middle;spacingLeft=12;' : 'align=center;verticalAlign=top;spacingTop=8;';
     out.push(cell(`band-${b.id}`, label(b.id), `rounded=1;arcSize=4;absoluteArcSize=1;fillColor=${b.fill};${align}${base}`, b.box));
   }
   for (const h of t.hexagons) {

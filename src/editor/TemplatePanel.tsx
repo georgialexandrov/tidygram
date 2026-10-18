@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { TEMPLATE_KINDS, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
+import { bandsKind, TEMPLATE_KINDS, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
 import { Popover } from './Popover.tsx';
 import { TEMPLATE_LABEL } from '../layout/template/defs.ts';
 import type { TemplateScene } from '../scene/template.ts';
@@ -9,6 +9,7 @@ export function TemplateGlyph({ kind }: { kind: TemplateKind | null }) {
   return (
     <svg className={`template-glyph${kind ? ' on' : ''}`} width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
       {kind === 'layered' && <path d="M1 2.5h12M1 7h12M1 11.5h12" />}
+      {kind === 'tiers' && <path d="M5.5 2.5h3M1 7h12M8 11.5h5" />}
       {kind === 'hexagonal' && <path d="M4 1.5h6L13 7l-3 5.5H4L1 7z" />}
       {kind === 'clean' && (
         <>
@@ -21,10 +22,11 @@ export function TemplateGlyph({ kind }: { kind: TemplateKind | null }) {
   );
 }
 
-const HINT: Record<TemplateKind, string> = { layered: 'bands, top to bottom', hexagonal: 'ports & adapters', clean: 'rings, inside out' };
+const HINT: Record<TemplateKind, string> = { layered: 'bands, top to bottom', hexagonal: 'ports & adapters', clean: 'rings, inside out', tiers: 'people, system, externals' };
 
 function rulesTitle(kind: TemplateKind, rules: TemplateRules): string {
   if (rules === 'off') return 'Flag nothing';
+  if (kind === 'tiers') return rules === 'relaxed' ? 'Flag lines that point up (a system calling a person, an external calling in)' : 'Also flag people using external systems directly';
   if (kind === 'layered') return rules === 'relaxed' ? 'Flag lines that point up (implementing an interface is fine)' : 'Also flag lines that skip a layer, and every upward realization';
   if (kind === 'clean') return rules === 'relaxed' ? 'Flag lines that point outward (adapters may use their drivers)' : 'Flag every outward line';
   return 'Flag adapters that bypass the ports, and a core or port that uses an adapter';
@@ -84,7 +86,7 @@ export const TemplatePicker = memo(function TemplatePicker({
                   ))}
                 </span>
               </div>
-              <p className="menu-note">Drag an element into another {kind === 'layered' ? 'band' : kind === 'clean' ? 'ring' : 'zone'} to move it there.</p>
+              <p className="menu-note">Drag an element into another {bandsKind(kind) ? 'band' : kind === 'clean' ? 'ring' : 'zone'} to move it there.</p>
             </>
           )}
         </div>

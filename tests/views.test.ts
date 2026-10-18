@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensureLayout } from '../src/layout/auto.ts';
 import { emptyLayout, pageLayout, parseLayout, serializeLayout, sliceLayout, viewLayout, withPageLayout, withSliceLayout, withViewLayout } from '../src/layout/layout-file.ts';
+import { applyTemplate, findViolations, guessLayers } from '../src/layout/template/index.ts';
+import { layersOf, resolveAssignments } from '../src/layout/template/defs.ts';
 import { c4View, c4Views } from '../src/model/c4-views.ts';
 import { parseDiagram } from '../src/model/diagram.ts';
 import type { Diagram } from '../src/model/types.ts';
@@ -151,18 +153,65 @@ describe('views in the sidecar', () => {
   });
 });
 
-describe('views lay out and route cleanly', () => {
-  let avoid: Avoid;
-  beforeAll(async () => {
-    const require = createRequire(import.meta.url);
-    avoid = await loadAvoid(join(dirname(require.resolve('libavoid-js')), 'libavoid.wasm'));
-  });
+let avoid: Avoid;
+beforeAll(async () => {
+  const require = createRequire(import.meta.url);
+  avoid = await loadAvoid(join(dirname(require.resolve('libavoid-js')), 'libavoid.wasm'));
+});
 
+describe('views lay out and route cleanly', () => {
   it.each(['context', 'container:shop', 'container:warehouse', 'component:api'])('%s: no line through a box or across a border it need not cross', async (key) => {
     const { diagram } = at(key);
     const layout = await ensureLayout(diagram, emptyLayout(), 'auto');
     expect(Object.keys(layout.nodes).sort()).toEqual(ids(diagram));
     const q = measureQuality(buildScene(diagram, layout, avoid), diagram);
     expect(q.details.filter((d) => d.startsWith('node:') || d.startsWith('container:'))).toEqual([]);
+  });
+});
+
+describe('C4 tiers template', () => {
+  const tiers = (d: Diagram) => Object.fromEntries([...guessLayers(d, { kind: 'tiers', assign: {} })].map(([id, g]) => [id, g.layer]));
+
+  it('people on top, the system in scope in the middle (named after it), externals below', () => {
+    const d = parseDiagram(readFileSync(new URL('../fixtures/architecture/c4-container.puml', import.meta.url), 'utf8'), 'c4-container.puml').diagram;
+    expect(layersOf({ kind: 'tiers' }, d).map((l) => l.label)).toEqual(['People', 'Online Shop', 'External systems']);
+    const g = tiers(d);
+    expect(g.customer).toBe('people');
+    expect(g.staff).toBe('people');
+    expect(['spa', 'api', 'db', 'bus'].map((id) => g[id])).toEqual(['system', 'system', 'system', 'system']);
+    expect(['stripe', 'mail', 'idp'].map((id) => g[id])).toEqual(['external', 'external', 'external']);
+  });
+
+  it('in a container view, another system of the company sits with the externals', () => {
+    const g = tiers(at('container:shop').diagram);
+    expect(g.warehouse).toBe('external');
+    expect(g.api).toBe('system');
+    // Context: no boundary is left, so every internal system is in scope.
+    const c = tiers(at('context').diagram);
+    expect([c.shop, c.warehouse, c.stripe, c.customer]).toEqual(['system', 'system', 'external', 'people']);
+    expect(layersOf({ kind: 'tiers' }, at('context').diagram)[1]!.label).toBe('Software system');
+  });
+
+  it('flags nothing by default (systems notify people), points-up when asked', () => {
+    const d = at('context').diagram;
+    const layout = applyTemplate(d, emptyLayout(), 'tiers');
+    expect(layout.template?.kind).toBe('tiers');
+    expect(findViolations(d, layout.template!, resolveAssignments(d, layout.template!))).toEqual([]);
+    const relaxed = { ...layout.template!, rules: 'relaxed' as const };
+    expect(findViolations(d, relaxed, resolveAssignments(d, relaxed)).map((v) => v.edge)).toEqual([]);
+    const back = { ...relaxed, assign: { stripe: 'people' } };
+    expect(findViolations(d, back, resolveAssignments(d, back)).map((v) => v.edge)).toEqual(['shop..>stripe']);
+  });
+
+  it('lays out in bands, each element inside its own band', async () => {
+    const { diagram } = at('container:shop');
+    const layout = applyTemplate(diagram, await ensureLayout(diagram, emptyLayout(), 'auto'), 'tiers');
+    const scene = buildScene(diagram, layout, avoid);
+    const bands = scene.template!.bands;
+    expect(bands.map((b) => b.id)).toEqual(['people', 'system', 'external']);
+    for (const n of scene.nodes) {
+      const band = bands.find((b) => b.id === scene.template!.assigned.get(n.node.id))!.box;
+      expect(n.box.y >= band.y && n.box.y + n.box.h <= band.y + band.h, n.node.id).toBe(true);
+    }
   });
 });

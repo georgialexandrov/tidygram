@@ -97,10 +97,16 @@ export interface ViewSettings {
   spacing?: Point;
 }
 
-/** The architecture templates: one picture where layers are bands (layered), a hexagon (ports & adapters) or rings (clean / onion). */
-export type TemplateKind = 'layered' | 'hexagonal' | 'clean';
+/**
+ * The architecture templates: one picture where layers are bands (layered), a hexagon (ports & adapters) or rings (clean / onion).
+ * `tiers` is C4's reading in bands: people on top, the system in scope in the middle, external systems below.
+ */
+export type TemplateKind = 'layered' | 'hexagonal' | 'clean' | 'tiers';
 
-export const TEMPLATE_KINDS: TemplateKind[] = ['layered', 'hexagonal', 'clean'];
+export const TEMPLATE_KINDS: TemplateKind[] = ['layered', 'hexagonal', 'clean', 'tiers'];
+
+/** Kinds drawn as horizontal bands (geometry, placement, drop regions, layer rules). */
+export const bandsKind = (kind: TemplateKind) => kind === 'layered' || kind === 'tiers';
 
 /** One band, ring or hexagon role. `id` is what assignments refer to; `label` is drawn. */
 export interface LayerDef {

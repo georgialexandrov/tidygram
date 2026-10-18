@@ -241,6 +241,24 @@ const CLEAN_MAP: RoleMap = {
   technology: 'frameworks',
 };
 
+/**
+ * C4 tiers read the kind, not the name: people (and use-case actors) on top,
+ * external systems below, everything else is the system in scope. When the
+ * diagram has system boundaries, a system outside all of them (another of the
+ * company's systems in a container view) is not in scope either: it goes with
+ * the externals.
+ */
+function tierOf(node: DNode, diagram: Diagram, known: Set<string>): Guess | undefined {
+  const containers = new Map(diagram.containers.map((c) => [c.id, c]));
+  const scoped = diagram.containers.some((c) => c.c4Boundary === 'system');
+  let inside = false;
+  for (let c = node.parent ? containers.get(node.parent) : undefined; c && !inside; c = c.parent ? containers.get(c.parent) : undefined) inside = c.c4Boundary === 'system';
+  // SystemDb/SystemQueue have no technology; their Container counterparts do.
+  const systemLike = node.kind === 'system' || ((node.kind === 'database' || node.kind === 'queue') && node.technology === undefined);
+  const layer = node.kind === 'person' || node.kind === 'actor' ? 'people' : node.external || (scoped && !inside && systemLike) ? 'external' : 'system';
+  return known.has(layer) ? { layer, source: 'kind' } : undefined;
+}
+
 function roleMap(kind: TemplateKind, diagram: Diagram): RoleMap {
   if (kind === 'hexagonal') return diagram.family === 'c4' ? HEX_C4 : HEX_MAP;
   if (kind === 'clean') return CLEAN_MAP;
@@ -276,6 +294,7 @@ export function guessLayers(diagram: Diagram, template: Pick<TemplateSettings, '
       const named = layerNamed(node.stereotype, layers);
       if (named) return { layer: named, source: 'stereotype' };
     }
+    if (template.kind === 'tiers') return tierOf(node, diagram, known);
     push(stereotypeRole(node, diagram, name), 'stereotype');
     // "port" in a name is as explicit as a stereotype.
     if (/\bport\b/.test(name)) push(portSide(name), 'name');
