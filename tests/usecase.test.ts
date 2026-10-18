@@ -85,12 +85,31 @@ describe('use-case layout', () => {
     }
     const q = measureQuality(scene, diagram);
     // ELK before this layout: 45 crossings, 3.39:1, longest line 0.88 of the width, a web of long lines.
-    expect(countCrossings(scene.edges.map((e) => e.points))).toBeLessThanOrEqual(44);
+    // 44 until actors were levelled with their figure (not the centre of figure + name) and the refund note
+    // got a lane beside the platform (2026-10-18): 33.
+    expect(countCrossings(scene.edges.map((e) => e.points))).toBeLessThanOrEqual(38);
     expect(q.aspect).toBeGreaterThan(1.3);
     expect(q.aspect).toBeLessThan(2.5);
     // Now ~44 crossings, 1.4:1, longest 0.82 (Track Order → Calculate Route, an include between packages).
     expect(Math.max(...scene.edges.map((e) => pathLength(e.points))) / scene.bounds.w).toBeLessThan(0.85);
     expect(q.containerCrossings + q.nodeCrossings + q.titleCrossings).toBe(0);
+  }, 30_000);
+
+  it('food delivery: a top-level note on a packaged use case sits outside the boundary, next to it', async () => {
+    const diagram = food();
+    const layout = await ensureLayout(diagram, emptyLayout(), 'auto');
+    const scene = buildScene(diagram, layout, avoid);
+    const platform = scene.containers.find((c) => c.id === 'Platform')!.box;
+    const note = scene.nodes.find((n) => n.node.id === 'N_Refund')!.box;
+    const refund = scene.nodes.find((n) => n.node.id === 'UC_Refund')!.box;
+    const outside = note.x >= platform.x + platform.w || note.x + note.w <= platform.x || note.y >= platform.y + platform.h || note.y + note.h <= platform.y;
+    expect(outside).toBe(true);
+    // Was below the platform, a ~600 px dotted line round the Fulfilment package.
+    const gapX = Math.max(0, note.x - (refund.x + refund.w), refund.x - (note.x + note.w));
+    const gapY = Math.max(0, note.y - (refund.y + refund.h), refund.y - (note.y + note.h));
+    expect(gapX + gapY).toBeLessThan(380);
+    const link = scene.edges.find((e) => e.edge.id === 'N_Refund..UC_Refund')!;
+    expect(pathLength(link.points)).toBeLessThan(500);
   }, 30_000);
 
   it('a note rides beside what it annotates', () => {

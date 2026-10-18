@@ -23,7 +23,8 @@ import { pack } from './template/place.ts';
  *   boxes), with include/extend counted double so the included use case
  *   ends up next to its base;
  * - a note rides beside what it annotates (a note outside the target's
- *   package goes just outside the boundary, nearest the target).
+ *   package goes just outside the boundary where its line is shortest:
+ *   above, below, or in a lane opened beside it, the actors moving out).
  *
  * Several grid shapes are returned; the caller routes and scores them.
  */
@@ -510,7 +511,8 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
         let best: number | undefined;
         st.f.forEach((id, j) => {
           for (const y of ysOf.get(id)!) {
-            const d = y - (ys[i]! + st.rel[j]!);
+            // Level with the figure, not the node's centre (an actor's figure sits above its name).
+            const d = y - (ys[i]! + st.rel[j]! + (shapes.get(id)!.anchor.dy ?? 0));
             if (Math.abs(d) < gap.level && ys[i]! + d >= lo && ys[i]! + d <= hi && (best === undefined || Math.abs(d) < Math.abs(best))) best = d;
           }
         });
@@ -647,7 +649,10 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
   const at = positions(state);
 
   // Notes for an element in another container (a top-level note on a packaged use case): just outside the
-  // outermost container that holds the target but not the note, straight above or below the target.
+  // outermost container that holds the target but not the note, wherever its line is shortest: straight
+  // above or below the target, or beside the container at the target's height, in a lane opened between
+  // the container and that side's actor column (the actors move out to make room).
+  const lanes = { left: 0, right: 0 };
   for (const [noteId, r] of rides) {
     if (at[noteId] || !at[r.target]) continue;
     const note = byId.get(noteId)!;
@@ -656,19 +661,55 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     const outer = ancestors(diagram, byId.get(r.target)!.parent).filter((c) => !own.has(c)).at(-1);
     const all = Object.entries(at).map(([id, p]) => nodeBox(p, shapes.get(id)!));
     const t = at[r.target]!;
-    let seed = { x: t.x, y: t.y };
-    if (outer) {
-      const box = boundsOf(diagram, outer, at, shapes, pad);
-      const up = t.y - box.y < box.y + box.h - t.y;
-      seed = { x: t.x, y: up ? box.y - gap.rider - ns.h / 2 : box.y + box.h + gap.rider + ns.h / 2 };
-      all.push(box);
+    if (!outer) {
+      at[noteId] = nudgeFree(t, ns, all, 1);
+      continue;
     }
-    at[noteId] = nudgeFree(seed, ns, all, up(seed, t));
+    const ts = shapes.get(r.target)!;
+    const box = boundsOf(diagram, outer, at, shapes, pad);
+    all.push(box);
+    // Elements and other containers in the way of the straight connector: the router goes round each.
+    const targetIn = new Set(ancestors(diagram, byId.get(r.target)!.parent));
+    const obstacles = [
+      ...Object.entries(at)
+        .filter(([id]) => id !== r.target && id !== noteId)
+        .map(([id, p]) => nodeBox(p, shapes.get(id)!)),
+      ...diagram.containers.filter((c) => !targetIn.has(c.id)).map((c) => boundsOf(diagram, c.id, at, shapes, pad)),
+    ].filter((b) => b.w > 0);
+    const detour = (a: Pt, b: Pt) => obstacles.filter((o) => segmentHitsBox(a, b, o)).length * unit;
+    const options: { p: Pt; line: number; side?: 'left' | 'right' }[] = [];
+    for (const dir of [-1, 1]) {
+      const p = nudgeFree({ x: t.x, y: dir < 0 ? box.y - gap.rider - ns.h / 2 : box.y + box.h + gap.rider + ns.h / 2 }, ns, all, dir);
+      const line = Math.abs(p.y - t.y) - (ns.h + ts.h) / 2 + Math.max(0, Math.abs(p.x - t.x) - (ns.w + ts.w) / 2);
+      options.push({ p, line: line + detour({ x: t.x, y: t.y + (dir * ts.h) / 2 }, { x: t.x, y: p.y - (dir * ns.h) / 2 }) });
+    }
+    for (const side of ['left', 'right'] as const) {
+      const dir = side === 'left' ? -1 : 1;
+      const x = side === 'left' ? box.x - gap.rider - ns.w / 2 : box.x + box.w + gap.rider + ns.w / 2;
+      // Lines from that side's actors run across the lane at their use cases' heights: keep off them.
+      const across = links
+        .filter((l) => (isActorId(l.a) && sides.get(l.a) === side) !== (isActorId(l.b) && sides.get(l.b) === side))
+        .map((l) => at[isActorId(l.a) && sides.get(l.a) === side ? l.b : l.a]?.y)
+        .filter((y) => y !== undefined)
+        .map((y) => ({ x: x - ns.w / 2, y: y - 4, w: ns.w, h: 8 }));
+      const p = nudgeAlong({ x, y: t.y }, ns, [...all, ...across]);
+      if (!p) continue;
+      // The lane widens the picture: count that against it.
+      const widen = Math.max(0, ns.w + 2 * gap.rider - lanes[side]);
+      const line = dir * (p.x - t.x) - (ns.w + ts.w) / 2 + Math.abs(p.y - t.y) + widen / 2;
+      options.push({ p, side, line: line + detour({ x: t.x + (dir * ts.w) / 2, y: t.y }, { x: p.x - (dir * ns.w) / 2, y: t.y }) });
+    }
+    const best = options.reduce((a, b) => (b.line < a.line ? b : a));
+    at[noteId] = best.p;
+    if (best.side) {
+      const need = ns.w + 2 * gap.rider;
+      const shift = Math.max(0, need - lanes[best.side]);
+      lanes[best.side] += shift;
+      for (const a of actors) if (sides.get(a.id) === best.side) at[a.id] = { x: at[a.id]!.x + (best.side === 'left' ? -shift : shift), y: at[a.id]!.y };
+    }
   }
   return at;
 }
-
-const up = (seed: { y: number }, t: { y: number }) => (seed.y < t.y ? -1 : 1);
 
 /** First spot from `seed` outwards (away from the target) where the note fits; then sideways. */
 function nudgeFree(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[], dir: number): { x: number; y: number } {
@@ -680,6 +721,18 @@ function nudgeFree(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[
     }
   }
   return seed;
+}
+
+/** Nearest spot to `seed` straight up or down where the note fits, if one is within reach. */
+function nudgeAlong(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[]): { x: number; y: number } | undefined {
+  const fits = (p: { x: number; y: number }) => !boxes.some((b) => overlaps(nodeBox(p, shape), b, 12));
+  for (let i = 0; i < 40; i++) {
+    for (const dir of i ? [-1, 1] : [1]) {
+      const p = { x: seed.x, y: seed.y + dir * i * 12 };
+      if (fits(p)) return p;
+    }
+  }
+  return undefined;
 }
 
 function ancestors(diagram: Diagram, parent: string | undefined): string[] {
