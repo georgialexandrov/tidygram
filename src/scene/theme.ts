@@ -107,7 +107,9 @@ export interface Theme {
     /** Edge label text (secondary, so quieter than element names). */
     labelText: string;
     /** C4: people (the start of every story) solid, internal systems tinted, external grey. */
-    c4: { personFill: string; personStroke: string; personText: string; personMuted: string; internalFill: string; internalStroke: string; externalFill: string; externalStroke: string };
+    c4: { personFill: string; personStroke: string; personText: string; personMuted: string; internalFill: string; internalStroke: string; externalFill: string; externalStroke: string;
+      /** Person head drawn as an outlined disc (box fill, box outline) instead of a fill-only disc cut out by a background ring. */
+      outlinedHead?: boolean };
     /** Databases and storage, when they get their own quiet treatment. */
     storage?: { fill: string; stroke: string };
     /** Clouds and other outside things, when they get their own quiet treatment. */
@@ -646,7 +648,7 @@ function paperTheme(name: string, label: string, t: PaperTokens): Theme {
       labelText: t.soft,
       storage: { fill: tint(0.05), stroke: t.muted },
       external: { fill: tint(0.03), stroke: tint(0.3) },
-      c4: { personFill: accentFill, personStroke: t.accent, personText: t.ink, personMuted: t.muted, internalFill: t.card, internalStroke: t.ink, externalFill: tint(0.03), externalStroke: tint(0.3) },
+      c4: { personFill: accentFill, personStroke: t.accent, personText: t.ink, personMuted: t.muted, internalFill: t.card, internalStroke: t.ink, externalFill: tint(0.03), externalStroke: tint(0.3), outlinedHead: true },
       archimate: tints(t.card, 0.1),
     },
     {
