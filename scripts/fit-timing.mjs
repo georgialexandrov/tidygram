@@ -15,7 +15,7 @@ try {
   ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data); if (msg.id && pending.has(msg.id)) pending.get(msg.id)(msg); });
   const send = (method, params = {}) => new Promise((ok) => { const n = ++id; pending.set(n, (msg) => ok(msg.result)); ws.send(JSON.stringify({ id: n, method, params })); });
   const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true })).result.value;
-  await send('Page.navigate', { url: 'http://localhost:5199/?file=fixtures/food-delivery.puml' });
+  await send('Page.navigate', { url: `http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/food-delivery.puml` });
   for (let i = 0; i < 50; i++) { await sleep(200); if (await evaluate(`document.querySelectorAll('[data-id]').length`)) break; }
   await sleep(500);
   for (let run = 0; run < 3; run++) {

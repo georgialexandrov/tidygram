@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const URL_ = 'http://localhost:5199/?file=fixtures/food-delivery.puml';
+const URL_ = `http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/food-delivery.puml`;
 const LAYOUT = new URL('../fixtures/food-delivery.layout.json', import.meta.url);
 const PORT = 9333;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -285,7 +285,7 @@ try {
     await evaluate(`document.querySelector('[data-template="${kind}"]').click()`);
     await sleep(700);
   };
-  await send('Page.navigate', { url: 'http://localhost:5199/?file=fixtures/architecture/layered-web-shop.puml' });
+  await send('Page.navigate', { url: `http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/architecture/layered-web-shop.puml` });
   for (let i = 0; i < 100; i++) {
     await sleep(100);
     if (await evaluate(`document.querySelector('.app')?.dataset.loaded === 'fixtures/architecture/layered-web-shop.puml'`)) break;

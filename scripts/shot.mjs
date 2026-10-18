@@ -4,7 +4,7 @@ import { sleep, withChrome } from './cdp.mjs';
 
 const [out = 'out/ui.png', file = 'fixtures/food-delivery.puml', script] = process.argv.slice(2);
 await withChrome(9335, async ({ open, evaluate, screenshot, errors }) => {
-  await open(`http://localhost:5199/?file=${file}`);
+  await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=${file}`);
   if (script) {
     await evaluate(script);
     await sleep(500);

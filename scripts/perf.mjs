@@ -27,7 +27,7 @@ try {
   const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
   const mouse = (type, x, y, buttons = 1) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1, modifiers: 1 });
 
-  await send('Page.navigate', { url: 'http://localhost:5199/?file=fixtures/food-delivery.puml' });
+  await send('Page.navigate', { url: `http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/food-delivery.puml` });
   for (let i = 0; i < 50; i++) { await sleep(200); if (await evaluate(`document.querySelectorAll('[data-id]').length`)) break; }
   await sleep(1000);
   await evaluate('window.__perf.reset()');

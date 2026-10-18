@@ -26,7 +26,7 @@ const started = Date.now();
 try {
   await withChrome(9340, async ({ evaluate, open, drag, centreOf, screenshot, errors }) => {
     for (const f of files) {
-      const ms = await open(`http://localhost:5199/?file=fixtures/${f}`);
+      const ms = await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/${f}`);
       const count = await evaluate(`[document.querySelectorAll('[data-id]').length, document.querySelectorAll('[data-edge]').length, document.querySelector('.toolbar .warn')?.textContent ?? '', document.querySelector('.blank-panel')?.dataset.blank ?? '']`);
       const nan = await evaluate(`document.querySelector('.canvas').innerHTML.includes('NaN')`);
       let pass = !nan && errors.length === 0;
@@ -45,7 +45,7 @@ try {
     }
 
     // Sequence: drag the last participant to the far left; it should become the first column.
-    await open('http://localhost:5199/?file=fixtures/sequence.puml');
+    await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/sequence.puml`);
     const before = await evaluate(`[...document.querySelectorAll('[data-id]')].slice(0, 7).map((g) => g.getAttribute('data-id'))`);
     const stripe = await centreOf('[data-id="Stripe"] path, [data-id="Stripe"] rect');
     const customer = await centreOf('[data-id="C"]');
@@ -58,9 +58,9 @@ try {
     console.log(`${pass ? 'ok  ' : 'FAIL'} sequence column drag: Stripe stored at x=${layout.nodes.Stripe?.x}, now left of Customer: ${xs.Stripe < xs.C} (order before: ${before.join(',')})`);
 
     // draw.io pages: the selector only on multi-page files; page 2's drag lands under pages.p2, page 1 stays put.
-    await open('http://localhost:5199/?file=fixtures/drawio/flowchart.drawio');
+    await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/drawio/flowchart.drawio`);
     const singleHasPicker = await evaluate(`!!document.querySelector('.page-select')`);
-    await open('http://localhost:5199/?file=fixtures/drawio/pages.drawio');
+    await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/drawio/pages.drawio`);
     const options = await evaluate(`[...document.querySelectorAll('.page-select option')].map((o) => o.value)`);
     // draw.io files draw where the file says, so page 1 may have no sidecar entries (or no sidecar) yet.
     const readPages = () => (existsSync(layoutOf('drawio/pages.drawio')) ? JSON.parse(readFileSync(layoutOf('drawio/pages.drawio'), 'utf8')) : { nodes: {} });
@@ -73,7 +73,7 @@ try {
     await drag(d1, [d1[0] + 80, d1[1] + 40], 10, 0);
     await sleep(700);
     const paged = readPages();
-    await open('http://localhost:5199/?file=fixtures/drawio/pages.drawio&page=p3');
+    await open(`http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/drawio/pages.drawio&page=p3`);
     const deep = await evaluate(`[document.querySelector('.app').dataset.page, [...document.querySelectorAll('[data-id]')].map((g) => g.dataset.id).join()]`);
     const pagesPass =
       !singleHasPicker &&

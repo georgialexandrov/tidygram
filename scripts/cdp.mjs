@@ -8,6 +8,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function withChrome(port, fn) {
+  port = process.env.CDP_PORT ?? port;
   const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'puml-cdp-'))}`, '--window-size=1600,1000', 'about:blank']);
   try {
     let target;
