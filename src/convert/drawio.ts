@@ -5,7 +5,7 @@ import type { AnyScene } from '../scene/any.ts';
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
 import { FREE_SIZE, containerPad, nodeShape } from '../scene/shapes.ts';
 import { themeOf, type Theme } from '../scene/theme.ts';
-import { RING_ASPECT, type TemplateScene } from '../scene/template.ts';
+import { ringBox, type TemplateScene } from '../scene/template.ts';
 import { KindLosses, warn, type ConvertResult, type IdMap } from './common.ts';
 import { orderedToDrawio } from './drawio-ordered.ts';
 
@@ -237,8 +237,9 @@ function templateCells(t: TemplateScene, theme: Theme, fresh: (base: string) => 
   }
   if (t.center) {
     for (const ring of [...t.rings].reverse()) {
-      const box = { x: t.center[0] - ring.r * RING_ASPECT, y: t.center[1] - ring.r, w: ring.r * 2 * RING_ASPECT, h: ring.r * 2 };
-      out.push(cell(`ring-${ring.id}`, label(ring.id), `ellipse;fillColor=${ring.fill};verticalAlign=top;spacingTop=6;${base}`, box));
+      // A rounded rectangle: draw.io's arcSize is the corner radius as a percentage of the shorter side.
+      const arc = Math.round((1000 * ring.c) / (2 * Math.min(ring.a, ring.b))) / 10;
+      out.push(cell(`ring-${ring.id}`, label(ring.id), `rounded=1;arcSize=${arc};fillColor=${ring.fill};verticalAlign=top;spacingTop=6;${base}`, ringBox(ring, t.center)));
     }
   }
   return out;
