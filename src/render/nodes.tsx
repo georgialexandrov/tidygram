@@ -299,7 +299,9 @@ function BoxElement({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Th
   if (kind === 'person') {
     // C4 person: a head resting on a rounded body, the same colour, cut out by a background ring.
     const r = 13 * k;
-    head = <circle cx={f(x + w / 2)} cy={f(y + r)} r={f(r)} fill={fill} stroke={stroke ?? theme.colors.background} strokeWidth={stroke ? strokeWidth : 2.5 * Math.sqrt(k)} />;
+    head = theme.colors.c4.outlinedHead && !theme.plantuml
+      ? <circle cx={f(x + w / 2)} cy={f(y + r)} r={f(r)} fill={fill} stroke={line} strokeWidth={strokeWidth} />
+      : <circle cx={f(x + w / 2)} cy={f(y + r)} r={f(r)} fill={fill} stroke={stroke ?? theme.colors.background} strokeWidth={stroke ? strokeWidth : 2.5 * Math.sqrt(k)} />;
     y += 2 * r - 6 * k;
     h -= 2 * r - 6 * k;
   }
