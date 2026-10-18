@@ -2,7 +2,7 @@ import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk.bundled.js';
 import { elk as elkInstance } from './elk.ts';
 import type { Diagram } from '../model/types.ts';
 import type { Positions } from '../scene/containers.ts';
-import { measureText } from '../scene/measure.ts';
+import { measureSecondary } from '../scene/measure.ts';
 import { containerPad, type NodeShape } from '../scene/shapes.ts';
 import type { Theme } from '../scene/theme.ts';
 
@@ -113,7 +113,7 @@ export async function blockPositions(diagram: Diagram, shapes: Map<string, NodeS
     const edges = levelList.map((e, i): ElkExtendedEdge => {
       const edge: ElkExtendedEdge = { id: `e${i}`, sources: [endpoint(e.from, e.fromNode, i, 'out')], targets: [endpoint(e.to, e.toNode, i, 'in')] };
       if (e.label) {
-        const t = measureText(e.label, theme.size.edge, false, theme.widthFactor);
+        const t = measureSecondary(e.label, theme.size.edge, theme);
         edge.labels = [{ text: e.label, width: t.width + 12, height: t.height + 4 }];
       }
       return edge;

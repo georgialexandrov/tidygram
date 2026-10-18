@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { NodeKind } from '../model/types.ts';
-import type { TextBlock } from '../scene/measure.ts';
+import { LINE_HEIGHT, type TextBlock } from '../scene/measure.ts';
 import type { SceneNode } from '../scene/scene.ts';
 import { badgeWidth, BOX_EXTRA, blockGaps, type MemberRow } from '../scene/shapes.ts';
 import { accentTint, mix, type Theme } from '../scene/theme.ts';
@@ -280,6 +280,8 @@ function boxColours(n: SceneNode, theme: Theme) {
     if (n.node.external) return { fill: c4.externalFill, stroke: c4.externalStroke, text: theme.plantuml ? c4.personText : c.text, muted: theme.plantuml ? c4.personMuted : c.muted };
     return { fill: c4.internalFill, stroke: c4.internalStroke, text: theme.plantuml ? c4.personText : c.text, muted: theme.plantuml ? c4.personMuted : c.muted };
   }
+  if (c.storage && (kind === 'database' || kind === 'storage')) return { ...c.storage, text: c.text, muted: c.muted };
+  if (c.external && kind === 'cloud') return { ...c.external, text: c.text, muted: c.muted };
   return { fill: c.shapeFill, stroke: c.shapeStroke, text: c.text, muted: c.muted };
 }
 
@@ -328,12 +330,26 @@ function BoxElement({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Th
       {kind === 'component' && <ComponentGlyph x={x + w - 20 * k} y={n.box.y + 8 * k} k={k} stroke={line === 'none' ? col.muted : line} fill={fill} />}
       {shape.archimate && <ArchimateGlyph type={shape.archimate.type} x={x + w - 8 * k} y={n.box.y + 8 * k} s={14 * k} stroke={col.text} />}
       {head}
+      {shape.tag && <TypeTag tag={shape.tag} x={n.box.x + 6 * k} y={n.box.y + 6 * k} theme={theme} />}
       {blocks.map((b, i) => {
         const el = <Text key={i} theme={theme} block={b.block} cx={mid} top={cursor} weight={b.weight} fill={b.fill} />;
         cursor += b.block.height + b.gap;
         return el;
       })}
     </>
+  );
+}
+
+/** The kind as a small outlined chip in a box's corner (`typeTag` themes). */
+function TypeTag({ tag, x, y, theme }: { tag: { text: string; w: number; h: number }; x: number; y: number; theme: Theme }) {
+  const k = theme.scale;
+  const size = 7 * k;
+  const block: TextBlock = { lines: [tag.text], width: tag.w, height: size * LINE_HEIGHT, size, mono: true, tracking: 0.06 };
+  return (
+    <g>
+      <rect x={f(x)} y={f(y)} width={f(tag.w)} height={f(tag.h)} rx={f(2 * k)} fill="none" stroke={theme.colors.muted} strokeWidth={0.8} strokeOpacity={0.4} />
+      <Text theme={theme} block={block} cx={x + tag.w / 2 + 0.03 * size} top={y + tag.h / 2 - block.height / 2} fill={theme.colors.muted} />
+    </g>
   );
 }
 
@@ -583,6 +599,7 @@ function ClassBox({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Them
           </text>
         </>
       )}
+      {s.tag && <TypeTag tag={s.tag} x={x + 6 * k} y={y + 6 * k} theme={theme} />}
       {s.stereo && <Text theme={theme} block={s.stereo} cx={x + w / 2} top={nameTop - s.stereo.height} fill={c.muted} />}
       {header > 0 && <Text theme={theme} block={s.text} cx={nameCx} top={nameTop} weight={classic ? 'bold' : 600} italic={kind === 'abstract' || kind === 'interface'} />}
       {classic || m.rows.some((r) => r.length) ? m.rows.map((rows, i) => {
@@ -615,7 +632,7 @@ function ClassBox({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Them
                   {row.type && (
                     <Text
                       theme={theme}
-                      block={{ ...block, lines: [row.type] }}
+                      block={{ ...block, lines: [row.type], mono: true }}
                       cx={json ? valueX : typeRight}
                       top={textTop}
                       align={json ? 'start' : 'end'}
@@ -641,7 +658,7 @@ function rectTop(x: number, y: number, w: number, h: number, r: number): string 
 
 /** JSON values: strings in the text colour, numbers/booleans/null in the accent so the shape of the data shows. */
 function jsonValueColour(value: string, theme: Theme): string {
-  if (/^(-?\d[\d.e+-]*|true|false|null)$/.test(value)) return theme.plantuml ? '#1963A0' : theme.colors.accent;
+  if (/^(-?\d[\d.e+-]*|true|false|null)$/.test(value)) return theme.plantuml ? '#1963A0' : (theme.colors.accentText ?? theme.colors.accent);
   if (/^[{[]/.test(value)) return theme.colors.muted;
   return theme.colors.text;
 }

@@ -27,20 +27,22 @@ interface TextProps {
   quietBrackets?: string;
   /** A knock-out outline in this colour behind the glyphs, for text that sits on lines (multiplicities, addresses). */
   halo?: string;
+  /** The note face (serif italic callout) where the theme has one. */
+  note?: boolean;
 }
 
-export function Text({ theme, block, cx, top, align = 'middle', weight, fill, caps, italic, underline, tabular, quietBrackets, halo }: TextProps) {
+export function Text({ theme, block, cx, top, align = 'middle', weight, fill, caps, italic, underline, tabular, quietBrackets, halo, note }: TextProps) {
   const lineH = block.size * LINE_HEIGHT;
   return (
     <text
-      fontFamily={theme.font}
+      fontFamily={block.mono && theme.mono ? theme.mono.font : note && theme.noteFont ? theme.noteFont : theme.font}
       fontSize={f(block.size * 100) / 100}
       fontWeight={weight}
-      fontStyle={italic ? 'italic' : undefined}
+      fontStyle={italic || (note && theme.noteFont) ? 'italic' : undefined}
       textDecoration={underline ? 'underline' : undefined}
       textAnchor={align}
       fill={fill ?? theme.colors.text}
-      letterSpacing={caps ? CAPS_TRACKING : undefined}
+      letterSpacing={caps ? `${block.tracking ?? theme.capsTracking}em` : block.tracking ? `${block.tracking}em` : undefined}
       stroke={halo}
       strokeWidth={halo ? Math.max(2.5, block.size * 0.28) : undefined}
       strokeLinejoin={halo ? 'round' : undefined}

@@ -1,6 +1,6 @@
 import type { DNode, Diagram } from '../model/types.ts';
 import type { Point } from '../layout/layout-file.ts';
-import { LINE_HEIGHT, textWidth } from './measure.ts';
+import { capsBlock, LINE_HEIGHT, textWidth } from './measure.ts';
 import { CONTAINER_PAD, type NodeShape, type Pad } from './shapes.ts';
 import type { Theme } from './theme.ts';
 
@@ -129,9 +129,8 @@ export function titleBox(kind: string, label: string, box: Box, theme: Theme): B
   const state = kind === 'state';
   const caps = !state && theme.containerTitle === 'caps';
   const size = state ? theme.size.node : theme.size.container;
-  const text = caps ? label.toUpperCase() : label;
-  // Caps are drawn with 0.08em letter spacing.
-  const width = Math.min(box.w - 4 * k, (textWidth(text, size, true, theme.widthFactor) + (caps ? text.length * size * 0.08 : 0)) * 1.06);
+  // Caps are drawn tracked (and mono, where the theme has it); capsBlock measures both.
+  const width = Math.min(box.w - 4 * k, (caps ? capsBlock(label, size, theme).width : textWidth(label, size, true, theme.widthFactor)) * 1.06);
   const height = size * LINE_HEIGHT;
   const d3 = kind === 'node' ? 8 * k : 0;
   const top = state ? box.y + 13 * k - height / 2 : box.y + (caps ? 10 * k + d3 : 6 * k);
