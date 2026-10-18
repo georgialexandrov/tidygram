@@ -207,6 +207,7 @@ with two outward lines, and a draw.io file with loosely named swimlanes
 |---|---|---|
 | **Layered** | full-width bands top to bottom (default Presentation / Application / Domain / Infrastructure; ArchiMate: Business / Application / Technology), titles in a gutter on the left. Each band is a row (wrapped round-robin into more rows when long); rows are ordered by a few barycentric sweeps (each element under the average of its neighbours in other bands, nearer bands weigh more, same-band neighbours half), packed without overlaps by isotonic regression around those wishes, then improved by adjacent swaps that shorten the lines | a line pointing up (a lower layer using a higher one). `relaxed` (default) lets a realization point up: implementing a higher layer's interface is dependency inversion. `strict` flags those too, and lines that skip a band. ArchiMate defaults to `off` (serving lines point up by design) |
 | **Hexagonal** | the application in a flat-topped hexagon, the domain in its own hexagon inside, application elements above and below it; inbound ports on the left outline, outbound ports on the right (their lollipop or box centre exactly on the line, ordered by their partners); adapters in columns outside: driving left, driven right, what touches a port or the core next to the hexagon, what only adapters reach (users, databases, external systems) one column further out. Adapter panels behind each side | an adapter using the core directly (not through a port); the core or a port depending on an adapter; the domain using the application around it; a driving adapter using an outbound port, or a driven adapter using an inbound one (each side has its own ports); a driving adapter using a driven adapter (a controller calling a repository skips the core). Adapters chaining on their own side (UI → controller, repository → database) are fine |
+| **C4 tiers** | the layered bands with C4's reading: People / the system in scope (the band takes the name of the diagram's single `System_Boundary`, else "Software system") / External systems. Guessed by kind only: people and actors on top, `_Ext` elements below, and so is a system outside every system boundary (another of the company's systems in a container view); everything else in the middle | none by default (`off`: systems notify people and externals call back by design); `relaxed`/`strict` read like layered |
 | **Clean / onion** | concentric rings inside out (default Entities / Use cases / Interface adapters / Frameworks & drivers). Each ring is a rounded rectangle (corner radius 0.6 of its half-height; convex, symmetric about both axes) sharing one centre, so they nest calmly with an even band; each takes the smallest width and height that hold its members (padded) and the ring inside (plus a band). Members sit as close to the ring inside as their boxes allow at their angle, in the angular order of what they connect to (circular mean of their neighbours, inner rings first), and placement searches rotations, shifts and swaps for the smallest ring; the core stays evenly spaced because the centre is its mean. Titles at the top of each ring, sliding along it off any line, label or member. Draw.io export: rounded rectangles (`arcSize` = corner radius). A whole fit takes under 100 ms: candidate sizes are scored on a quick arrangement, the winner gets the full search once | a dependency pointing outward. `relaxed` lets the interface adapters use the frameworks & drivers ring (a repository talking to its database); `strict` flags every outward line |
 
 **Guessing.** Every element gets a template-neutral role first, from the
@@ -266,9 +267,30 @@ sidecar, re-keyed.
 - **Fit to frame** keeps the arrangement and only chooses size, gaps and
   (layered) elements per row, trying 21–147 placements in a few ms.
 
-Not done: C4-style tiers (people top, system boundary middle, external
-systems right); zoom levels (C4 context → container → component as switchable
-views) — the sidecar has room for them as a `views` map shaped like `pages`.
+Not done: tiers with externals in a column on the right (they are the bottom
+band); an empty band (no people in a component view) is still drawn.
+
+## C4 zoom levels
+
+One PlantUML C4 file that nests `Container_Boundary` inside
+`System_Boundary` holds all three C4 levels; views show one level without
+touching the source (`src/model/c4-views.ts`, fixture `fixtures/c4/zoom.puml`):
+
+| View | Shows |
+|---|---|
+| as written | the file as it stands (the sidecar's top level) |
+| `context` | people and systems: every system and container boundary collapsed into one box (same id as the boundary), relations lifted to the boxes; relations inside one box vanish, several between the same two boxes become one line (`Sends, Sends receipts`, `A, B and 2 more`; the technology only when they share it) |
+| `container:<system>` | that system open (its containers; container boundaries inside it as container boxes), other systems collapsed; only the inside and what relates to it directly |
+| `component:<container>` | that container boundary open inside its open system; again only the inside and its direct neighbours |
+
+Enterprise and plain `Boundary` groupings never collapse. `Lay_*` hints are
+kept only between the elements they were written for. Editor: a view
+selector next to the diagram picker (C4 files with boundaries only;
+`?view=context` deep links). CLI: `--view context|container:<id>|component:<id>`
+(output `x-context.svg`, `x-container_shop.svg`). Each view has its own layout
+in the sidecar (see layout.json) and can carry its own template.
+
+    pnpm render fixtures/c4/zoom.puml --view context --template tiers --fit 16:9
 
 ## Use
 
@@ -278,7 +300,8 @@ views) — the sidecar has room for them as a `views` map shaped like `pages`.
     pnpm render fixtures/food-delivery.puml -o out/food-delivery.svg
     pnpm render fixtures/food-delivery.puml --theme modern --fit 16:9   # FIT_DEBUG=1 prints every candidate's score
     pnpm render fixtures/drawio/pages.drawio --page Details             # one page of a multi-page draw.io file → pages-p2.svg
-    pnpm render fixtures/architecture/layered-web-shop.puml --template layered   # bands; also hexagonal, clean, none
+    pnpm render fixtures/architecture/layered-web-shop.puml --template layered   # bands; also hexagonal, clean, tiers, none
+    pnpm render fixtures/c4/zoom.puml --view container:shop                     # a C4 zoom level → zoom-container_shop.svg
 
 Editor: drag elements (they become pinned), drag a box title to move the
 box with its contents, pull a line to bend it, double-click a bend to remove
@@ -533,6 +556,15 @@ Per type:
 
   Code: `pageLayout(file, key)` / `withPageLayout(file, key, layout)` in
   `src/layout/layout-file.ts`; everything else sees one page.
+- **C4 views**: the diagram as written is the top level; each zoom level
+  (`context`, `container:<id>`, `component:<id>`) gets its own `nodes`,
+  `edges` and `template` under `views`, keyed like `--view`. A view without
+  its own `view` settings uses the top level's and only stores them when they
+  differ. Code: `viewLayout` / `withViewLayout` (and `sliceLayout` /
+  `withSliceLayout` for page or view).
+
+      { "version": 1, "nodes": { ... }, "edges": {},
+        "views": { "context": { "nodes": { "shop": { "x": 400, "y": 200 } }, "edges": {} } } }
 
 ## How
 
