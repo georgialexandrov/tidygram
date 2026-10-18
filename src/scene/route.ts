@@ -36,7 +36,7 @@ export const ROUTING = {
  * thin margin of their own, or a line could pass neither between a node and
  * its container's border nor between two containers.
  */
-export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, requests: RouteRequest[], obstacles: Box[] = []): Map<string, Point[]> {
+export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, requests: RouteRequest[], obstacles: Box[] = [], options: { mergeSharedEnds?: boolean } = {}): Map<string, Point[]> {
   const A = avoid;
   const router = new A.Router(A.RouterFlag.OrthogonalRouting.value);
   router.setRoutingParameter(A.RoutingParameter.shapeBufferDistance, 0);
@@ -44,7 +44,8 @@ export function routeEdges(avoid: Avoid, shapes: Map<string, RouteShape>, reques
   router.setRoutingParameter(A.RoutingParameter.segmentPenalty, ROUTING.segmentPenalty);
   if (ROUTING.crossingPenalty) router.setRoutingParameter(A.RoutingParameter.crossingPenalty, ROUTING.crossingPenalty);
   router.setRoutingOption(A.RoutingOption.nudgeOrthogonalSegmentsConnectedToShapes, true);
-  router.setRoutingOption(A.RoutingOption.nudgeSharedPathsWithCommonEndPoint, true);
+  // Off for bundles (see bundle.ts): branches leaving one door then run together until they part.
+  router.setRoutingOption(A.RoutingOption.nudgeSharedPathsWithCommonEndPoint, !options.mergeSharedEnds);
 
   const refs = new Map<string, unknown>();
   for (const [id, s] of shapes) {

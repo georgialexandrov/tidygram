@@ -10,6 +10,7 @@ import { placeEndLabel, placeMidLabel, type LabelObstacles } from './labels.ts';
 import { containerPad, nodeShape, orientBars, type NodeShape } from './shapes.ts';
 import { measureSecondary, type TextBlock } from './measure.ts';
 import { ROUTING, routeEdges, type RouteShape } from './route.ts';
+import { bundlesHelp, busyness, clashingEnds, planBundles, portAt, type RoutedEnd } from './bundle.ts';
 
 /** A container wall for the router: how far it reaches outside and inside the border (see `wallsFor`). */
 const WALL = { outer: 7, inner: 8, top: 3 };
@@ -320,6 +321,19 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     }
   }
   const routed = visible.filter((e) => !reused.has(e.id));
+  // Lines from one element into a container leave it from one spot and run as one until they part (see bundle.ts).
+  const bundled =
+    bundlesHelp(diagram) && !layout.template
+      ? planBundles(routed, {
+          isNode: (id) => byId.has(id),
+          parentOf: (id) => {
+            const p = parentOf.get(id);
+            return p && containerOf.has(p) ? p : undefined;
+          },
+          within,
+          keep: (e, end) => !!layout.edges[e.id]?.via?.length || !!layout.edges[e.id]?.[end] || !!ports.get(e.id)?.[end],
+        })
+      : new Map<string, 'from' | 'to'>();
   // Drag fast path: only the walls near the lines being re-routed (each wall is another obstacle to route round).
   let near: Box | undefined;
   if (reused.size && routed.length) {
@@ -357,6 +371,17 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
       return vertical ? [at, p.outline[1]] : [p.outline[0], at];
     };
   };
+  /** Bundled lines run together (`bundled`): only once no two other lines share an end. */
+  let merge = false;
+  const ends = (lines: DEdge[]): RoutedEnd[] =>
+    lines.flatMap((e) =>
+      e.from === e.to
+        ? []
+        : (['from', 'to'] as const).map((end) => {
+            const point = stubs.get(`${e.id}:${end}`)?.route ?? ports.get(e.id)?.[end]?.route;
+            return point ? { e, end, point } : { e, end, pin: end === 'from' ? e.from : e.to };
+          }),
+    );
   /** Routes `lines` with the current ports, then routes the ones that went wrong again (see below). */
   const routeLines = (lines: DEdge[]): Map<string, Point[]> => {
     const requests = (lines: DEdge[]) =>
@@ -368,7 +393,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
         fromPoint: stubs.get(`${e.id}:from`)?.route ?? ports.get(e.id)?.from?.route,
         toPoint: stubs.get(`${e.id}:to`)?.route ?? ports.get(e.id)?.to?.route,
       }));
-    const routes = routeEdges(avoid, routeShapes, requests(lines), obstacles);
+    const routes = routeEdges(avoid, routeShapes, requests(lines), obstacles, { mergeSharedEnds: merge });
     // Two kinds of failure: libavoid draws a straight line through everything when no route exists
     // (a door it can't reach), and a line can slip into a container through one line's door and out
     // through another's. Route those again on their own, so only their own doors are open, opened to the
@@ -386,7 +411,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
       if (stuck.length) {
         const ids = new Set(stuck.map((e) => e.id));
         const walls = containerObstacles(stuck, near, true);
-        const again = routeEdges(avoid, routeShapes, requests(stuck), walls);
+        const again = routeEdges(avoid, routeShapes, requests(stuck), walls, { mergeSharedEnds: merge });
         const choose = (e: DEdge, candidates: [Point[] | undefined, readonly Box[]][]) => {
           let best = routes.get(e.id)!;
           let worst = faults(e, best, obstacles);
@@ -400,7 +425,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
         const still = stuck.filter((e) => choose(e, [[again.get(e.id), walls]]) > 0);
         // Last resort, the router as it was before walls: round the boxes, through the containers.
         if (still.length) {
-          const bare = routeEdges(avoid, routeShapes, requests(still), []);
+          const bare = routeEdges(avoid, routeShapes, requests(still), [], { mergeSharedEnds: merge });
           for (const e of still) choose(e, [[bare.get(e.id), []]]);
         }
       }
@@ -428,11 +453,57 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
         points = [...points.slice(0, points.length - skip), ...lead.reverse()];
       }
     }
+    // Merged routing can slide a shared stretch off a pinned end's centre: run on into the centre first.
+    if (merge && routes.has(e.id)) {
+      if (from && !port?.from) points = [...toCentre([...points].reverse(), from).reverse()];
+      if (to && !port?.to) points = toCentre(points, to);
+    }
     if (from && !port?.from) points = clipStart(points, from.anchor);
     if (to && !port?.to) points = clipEnd(points, to.anchor);
     return simplify(points);
   };
+  // While dragging there is no second routing: bundle the dragged lines only if nothing else would merge.
+  if (bundled.size && reused.size) {
+    const clash = clashingEnds(ends(routed), bundled);
+    merge = !clash.stuck && !clash.fixable.length;
+  }
   let routes = routeLines(routed);
+  /**
+   * Full builds: routes the bundles merged (see bundle.ts), after the first untangling, in place of the
+   * plain re-route. Kept only where the drawn lines read better than `plain` (the first routing, as
+   * drawn); true when kept.
+   */
+  const routeBundled = (plain: { e: DEdge; points: Point[] }[]): boolean => {
+    // The bundles leave their sources from one spot (the centre pin, no port), and every other end that
+    // shares a spot gets a port where its line already meets the node; then the bundles merge.
+    const before = new Map(ports);
+    for (const [id, end] of bundled) {
+      const p = ports.get(id);
+      if (p?.[end]) ports.set(id, { ...p, [end]: undefined });
+    }
+    const clash = clashingEnds(ends(routed), bundled);
+    const frozen = clash.stuck ? undefined : clash.fixable.map((r) => {
+      const pts = plain.find((l) => l.e === r.e)!.points;
+      const [end, next] = r.end === 'from' ? [pts[0], pts[1]] : [pts[pts.length - 1], pts[pts.length - 2]];
+      const n = byId.get(r.pin!);
+      return { r, port: end && next && n ? portAt(n.anchor, n.box, end, next, ROUTING.shapeBuffer) : undefined };
+    });
+    let better = false;
+    if (frozen?.every((f) => f.port)) {
+      for (const { r, port } of frozen) ports.set(r.e.id, { ...ports.get(r.e.id), [r.end]: port });
+      merge = true;
+      const merged = routeLines(routed);
+      // Kept only where it reads better: drawn lines, crossings once per spot.
+      better = busyness(routed.map((e) => drawn(e, merged))) < busyness(plain.map((l) => l.points));
+      if (better) routes = merged;
+      else merge = false;
+    }
+    if (!better) {
+      ports.clear();
+      for (const [id, p] of before) ports.set(id, p);
+    }
+    return better;
+  };
   // Lines that ran into one spot get spots of their own, and everything is routed again so nudging sees the
   // new ends. Full builds only: while dragging, the dragged lines keep the plain route until release. (Done
   // live, it needs a second routing of the dragged lines on nearly every frame: +1.3 ms median per drag
@@ -442,7 +513,9 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     const ctx = { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, scale: theme.scale };
     // Twice at most: the second routing can bring two other ends together.
     for (let round = 0; round < 2; round++) {
-      const changed = untangle(routed.map((e) => ({ e, points: drawn(e, routes) })), ports, ctx);
+      const lines = routed.map((e) => ({ e, points: drawn(e, routes) }));
+      const changed = untangle(lines, ports, ctx);
+      if (round === 0 && bundled.size && routeBundled(lines)) break;
       if (!changed.size) break;
       routes = routeLines(routed);
     }
@@ -488,6 +561,15 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const label = (e: SceneEdge): Box[] => (e.label ? [{ x: e.label.x - e.label.text.width / 2 - 4 * theme.scale, y: e.label.y - e.label.text.height / 2 - 2 * theme.scale, w: e.label.text.width + 8 * theme.scale, h: e.label.text.height + 4 * theme.scale }] : []);
   const shown = template?.kind === 'clean' ? nudgeRingTitles(template, edges.map((e) => e.points), [...nodes.map((n) => n.box), ...edges.flatMap(label)], theme) : template;
   return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, template: shown };
+}
+
+/** A route that should end at `n`'s centre pin, carried on to it square if it stops short. */
+function toCentre(points: Point[], n: SceneNode): Point[] {
+  const last = points[points.length - 1];
+  const c: Point = [n.anchor.cx, n.anchor.cy];
+  if (!last || (Math.abs(last[0] - c[0]) < 0.5 && Math.abs(last[1] - c[1]) < 0.5)) return points;
+  if (Math.abs(last[0] - c[0]) < 0.5 || Math.abs(last[1] - c[1]) < 0.5) return [...points, c];
+  return [...points, [c[0], last[1]], c];
 }
 
 /**
