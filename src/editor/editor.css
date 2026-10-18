@@ -1713,3 +1713,34 @@ button.link {
     transition: none !important;
   }
 }
+
+/* Drop overlay: files dragged over the window. Pointer events pass through so the drop reaches the window. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ink, #1c1b19) 14%, transparent);
+  backdrop-filter: blur(2px);
+}
+.drop-card {
+  display: grid;
+  gap: 6px;
+  max-width: min(520px, calc(100vw - 48px));
+  padding: 36px 48px;
+  text-align: center;
+  background: var(--paper, #f6f4ee);
+  color: var(--ink, #1c1b19);
+  border: 2px dashed currentColor;
+  border-radius: 6px;
+}
+.drop-card strong {
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+.drop-card span {
+  opacity: 0.7;
+  font-size: 13px;
+}
