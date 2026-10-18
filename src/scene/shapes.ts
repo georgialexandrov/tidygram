@@ -1,5 +1,5 @@
 import type { DNode, Diagram, NodeKind } from '../model/types.ts';
-import { LINE_HEIGHT, measureText, type TextBlock } from './measure.ts';
+import { LINE_HEIGHT, measureSecondary, measureText, type TextBlock } from './measure.ts';
 import { archimateLayer, type Theme } from './theme.ts';
 
 /** Where lines attach, as offsets from the node centre. */
@@ -51,7 +51,18 @@ export interface NodeShape {
   members?: MemberLayout;
   /** ArchiMate elements: the layer (fill) and type glyph drawn in the corner instead of a stereotype. */
   archimate?: { layer: string; type: string };
+  /** `typeTag` themes: the kind as a small outlined tag in the top-left corner (`CONT`, `IFACE`). */
+  tag?: { text: string; w: number; h: number };
 }
+
+/** Type tags are 7px mono caps in a chip at least 28 wide and 12 high. */
+export function tagMetrics(text: string, theme: Theme): { text: string; w: number; h: number } {
+  const k = theme.scale;
+  return { text, w: Math.ceil(Math.max(28, text.length * 7 * 0.68 + 8) * k), h: 12 * k };
+}
+
+const C4_TAG: Partial<Record<NodeKind, string>> = { system: 'SYS', container: 'CONT', component: 'COMP' };
+const CLASS_TAG: Record<string, string> = { interface: 'IFACE', enum: 'ENUM', annotation: 'ANNOT', struct: 'STRUCT', protocol: 'PROTO', exception: 'EXC', record: 'RECORD', trait: 'TRAIT', metaclass: 'META', stereotype: 'STEREO' };
 
 /** One class member / ER column / JSON entry, split for column alignment. */
 export interface MemberRow {
@@ -226,7 +237,7 @@ function themedShape(node: DNode, theme: Theme): NodeShape {
   const strong = (theme.nodeWeight ?? 400) >= 500;
   const measure = (text: string, size: number, bold = false) => measureText(text, size, bold, theme.widthFactor);
   const showStereo = node.stereotype && node.stereotype !== 'boxless' && (node.kind !== 'actor' || theme.actor.showStereotype);
-  const stereo = showStereo ? measure(`«${node.stereotype}»`, theme.size.note) : undefined;
+  const stereo = showStereo ? (theme.mono ? measureSecondary(`«${node.stereotype}»`, theme.size.edge, theme, { tracking: 0 }) : measure(`«${node.stereotype}»`, theme.size.note)) : undefined;
 
   switch (node.kind) {
     case 'actor': {
@@ -350,8 +361,9 @@ function themedShape(node: DNode, theme: Theme): NodeShape {
   const c4 = node.kind === 'system' || node.kind === 'container' || node.kind === 'person' || node.technology !== undefined || node.description !== undefined;
   const layer = node.kind === 'rectangle' ? archimateLayer(node.stereotype) : undefined;
   const text = measure(node.label, theme.size.node, c4 || strong);
-  const caption = c4Caption(node, theme);
-  const tech = caption ? measure(caption, theme.size.edge) : undefined;
+  const tagText = theme.typeTag && c4 && !layer ? (node.external && node.kind !== 'person' ? 'EXT' : C4_TAG[node.kind]) : undefined;
+  const caption = c4Caption(node, theme, !!tagText);
+  const tech = caption ? measureSecondary(caption, theme.size.edge, theme, { tracking: 0 }) : undefined;
   const desc = node.description?.length ? measure(wrap(node.description.join('\n')), theme.size.note) : undefined;
   const extra = { ...BOX_EXTRA[node.kind] };
   // ArchiMate: the type is a glyph in the top-right corner, not a «stereotype» line.
@@ -362,9 +374,10 @@ function themedShape(node: DNode, theme: Theme): NodeShape {
   // Chen weak entity: room for the inner outline.
   const ring = node.double ? 8 * k : 0;
   const minW = c4 ? 160 : layer ? 120 : 80;
-  const w = Math.ceil(Math.max(minW * k, contentW + (28 + (extra.left ?? 0) + (extra.right ?? 0)) * k) + ring);
+  const tag = tagText ? tagMetrics(tagText, theme) : undefined;
+  const w = Math.ceil(Math.max(minW * k, contentW + (28 + (extra.left ?? 0) + (extra.right ?? 0)) * k, tag ? contentW + 2 * (tag.w + 6 * k) : 0) + ring);
   const h = Math.ceil(Math.max((c4 ? 68 : layer ? 52 : 40) * k, contentH + (c4 ? 24 : 18 + (extra.top ?? 0) + (extra.bottom ?? 0)) * k + (c4 ? (extra.top ?? 0) * k : 0)) + ring);
-  const shape: NodeShape = { w, h, text, stereo: layer ? undefined : stereo, tech, desc, anchor: { dx: 0, dy: 0, w, h, shape: node.kind === 'cloud' ? 'ellipse' : 'rect' } };
+  const shape: NodeShape = { w, h, text, stereo: layer ? undefined : stereo, tech, desc, tag, anchor: { dx: 0, dy: 0, w, h, shape: node.kind === 'cloud' ? 'ellipse' : 'rect' } };
   if (layer) shape.archimate = { layer, type: node.stereotype!.slice(layer.length).trim() || layer };
   return shape;
 }
@@ -381,10 +394,11 @@ const C4_WORD: Partial<Record<NodeKind, string>> = { person: 'Person', system: '
  * show the element type with it, as C4 tools do (`Container · NestJS`),
  * because in a slide the type is what tells a person from a system.
  */
-export function c4Caption(node: DNode, theme: Theme): string | undefined {
+export function c4Caption(node: DNode, theme: Theme, tagged = false): string | undefined {
   if (theme.plantuml) return node.technology ? `[${node.technology}]` : undefined;
   const isC4 = node.kind === 'system' || node.kind === 'container' || node.kind === 'person' || node.technology !== undefined;
   if (!isC4) return undefined;
+  if (tagged) return node.technology;
   const word = (node.external && node.kind !== 'person' ? 'External ' : '') + (C4_WORD[node.kind] ?? 'Container');
   return node.technology ? `${word} · ${node.technology}` : word;
 }
@@ -396,8 +410,9 @@ function classShape(node: DNode, theme: Theme, measure: (t: string, s: number, b
   // Classic shows PlantUML's round "C/I/A/E" spot left of the name.
   const headless = json && !node.label;
   const spot = theme.plantuml && !json ? 26 * k : 0;
-  const kindLabel =
-    node.classKind && !['class', 'abstract', 'entity', 'object', 'json'].includes(node.classKind) && !theme.plantuml ? measure(`«${node.classKind}»`, theme.size.note) : undefined;
+  const hasKind = node.classKind && !['class', 'abstract', 'entity', 'object', 'json'].includes(node.classKind) && !theme.plantuml;
+  const tag = theme.typeTag && hasKind ? tagMetrics(CLASS_TAG[node.classKind!] ?? node.classKind!.slice(0, 5).toUpperCase(), theme) : undefined;
+  const kindLabel = hasKind && !tag ? measure(`«${node.classKind}»`, theme.size.note) : undefined;
   const padY = (theme.plantuml ? 6 : 8) * k;
   const header = headless ? 0 : text.height + (stereo?.height ?? 0) + (kindLabel?.height ?? 0) + padY * 2;
 
@@ -413,14 +428,14 @@ function classShape(node: DNode, theme: Theme, measure: (t: string, s: number, b
   const keyW = Math.max(0, ...all.filter((r) => r.key).map((r) => badgeWidth(r.key!, size, theme)));
   const marker = Math.max(all.some((r) => r.vis) ? size * 1.1 : 0, keyW ? keyW + 6 * k : 0, all.some((r) => r.required) && !keyW ? size * 0.8 : 0);
   const nameW = Math.max(0, ...all.map((r) => w(r.name, r.key?.includes('PK'))));
-  const typeW = Math.max(0, ...all.map((r) => (r.type ? w(r.type) : 0)));
+  const typeW = Math.max(0, ...all.map((r) => (r.type ? measureSecondary(r.type, size, theme, { tracking: 0 }).width : 0)));
   const gap = typeW ? (json ? 14 : 20) * k : 0;
   const members: MemberLayout = { rows, marker, name: nameW, gap, type: typeW, rowH, pad, size };
   const contentW = marker + nameW + gap + typeW;
   const compartments = rows.map((r, i): TextBlock => ({ lines: node.compartments![i]!.length ? node.compartments![i]! : [' '], width: contentW, height: r.length * rowH, size }));
   const padX = 12 * k;
   const minW = (headless ? 60 : theme.plantuml ? 100 : 120) * k;
-  const width = Math.ceil(Math.max(minW, text.width + spot + 32 * k, (stereo?.width ?? 0) + 24 * k, (kindLabel?.width ?? 0) + 24 * k, contentW + padX * 2));
+  const width = Math.ceil(Math.max(minW, text.width + spot + 32 * k, tag ? text.width + 2 * (tag.w + 10 * k) : 0, (stereo?.width ?? 0) + 24 * k, (kindLabel?.width ?? 0) + 24 * k, contentW + padX * 2));
   // The modern themes draw a memberless class as a plain named box; PlantUML keeps its empty compartments.
   const memberless = !theme.plantuml && rows.every((r) => !r.length);
   const body = memberless ? 4 * k : rows.reduce((sum, r) => sum + (r.length ? r.length * rowH + pad * 2 : 8 * k), 0);
@@ -430,6 +445,7 @@ function classShape(node: DNode, theme: Theme, measure: (t: string, s: number, b
     h,
     text,
     stereo: stereo ?? kindLabel,
+    tag,
     header,
     compartments,
     members,

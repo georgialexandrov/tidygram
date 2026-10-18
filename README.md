@@ -401,6 +401,8 @@ diagram text is 10–13 px) and renders every element kind and line end in it.
 | `blueprint` | Navy paper, white linework, mono type, amber accent |
 | `mono` | Black on white, no colour: print and photocopies |
 | `primary` | Matches the editor chrome: black ink on warm white, primaries as signals |
+| `paper` | Light editorial figure: warm paper, near-black ink, one tangerine accent for people, roots, progress and broken rules. White cards, hairline containers, mono sublabels and line labels, tracked-caps eyebrows, small type tags (`CONT`, `IFACE`), dashed serif-italic notes, no shadows |
+| `paper-dark` | `paper` inverted: deep slate paper, off-white ink, a lighter tangerine accent |
 
 `mint` was retired (it was `modern` in green); old sidecars that name it
 open in `modern` (`THEME_ALIASES` in `src/scene/theme.ts`), and so do

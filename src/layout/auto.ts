@@ -3,7 +3,7 @@ import { elk } from './elk.ts';
 import type { DNode, Diagram } from '../model/types.ts';
 import { ancestry, containerBoxes, nodeBox, overlaps, sourceCentre, type Box, type Positions } from '../scene/containers.ts';
 import { containerPad, nodeShape, uprightBar, type NodeShape, type Pad } from '../scene/shapes.ts';
-import { measureText } from '../scene/measure.ts';
+import { measureSecondary } from '../scene/measure.ts';
 import { themeFor, themeOf, type Theme } from '../scene/theme.ts';
 import { chosenEnds, emptyLayout, sideOfFraction, type EdgeLayout, type LayoutFile } from './layout-file.ts';
 import { loadedAvoid } from '../scene/avoid.ts';
@@ -170,7 +170,7 @@ export async function elkPositions(
     if (!source || !target) return;
     const edge: ElkExtendedEdge = { id: `e${i}`, sources: [source], targets: [target] };
     if (e.label) {
-      const t = measureText(e.label, theme.size.edge, false, theme.widthFactor);
+      const t = measureSecondary(e.label, theme.size.edge, theme);
       edge.labels = [{ text: e.label, width: t.width, height: t.height }];
     }
     (source.startsWith('c:') || target.startsWith('c:') ? containerEdges : root.edges!).push(edge);

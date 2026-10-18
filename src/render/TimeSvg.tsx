@@ -83,11 +83,13 @@ export function GanttContent({ scene, ix }: { scene: GanttScene; ix?: Interactio
           // Solid = done. A task with a completion shows done in full colour and the rest as a tint;
           // a task without one is drawn in the full colour (its progress isn't known, not zero).
           const ink = custom ?? (classic ? c.actorFill : c.accent);
-          const tint = isHex(ink) ? mix(ink, c.background, classic ? 0 : 0.72) : ink;
+          // A theme's `bar` ink carries the plan; the accent is then only the progress made.
+          const plan = custom ?? c.bar ?? ink;
+          const tint = isHex(plan) ? mix(plan, c.background, classic ? 0 : 0.72) : plan;
           const partial = r.done !== undefined;
           bar = (
             <>
-              <rect x={f(r.bar.x)} y={f(r.bar.y)} width={f(r.bar.w)} height={f(r.bar.h)} rx={f(rx)} fill={partial ? tint : classic ? ink : isHex(ink) ? mix(ink, c.background, 0.15) : ink} stroke={selected ? EDITOR_COLORS.selected : classic ? c.actorStroke : 'none'} strokeWidth={selected ? 2 : 1} />
+              <rect x={f(r.bar.x)} y={f(r.bar.y)} width={f(r.bar.w)} height={f(r.bar.h)} rx={f(rx)} fill={partial ? tint : classic ? ink : isHex(plan) ? mix(plan, c.background, 0.15) : plan} stroke={selected ? EDITOR_COLORS.selected : classic ? c.actorStroke : 'none'} strokeWidth={selected ? 2 : 1} />
               {partial && r.done! > 0 && (
                 <rect x={f(r.bar.x)} y={f(r.bar.y)} width={f(Math.max(rx * 2, r.bar.w * r.done!))} height={f(r.bar.h)} rx={f(rx)} fill={classic ? (custom ?? c.actorGlyph) : ink} fillOpacity={classic ? 0.55 : 1} />
               )}

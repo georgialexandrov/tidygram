@@ -1,7 +1,7 @@
 import type { LayoutFile } from '../layout/layout-file.ts';
 import type { DNode, NodeKind, SeqEvent, SeqParticipant, SequenceModel } from '../model/types.ts';
 import type { Box } from './containers.ts';
-import { measureText, type TextBlock } from './measure.ts';
+import { capsBlock, measureSecondary, measureText, type TextBlock } from './measure.ts';
 import type { SceneNode } from './scene.ts';
 import { nodeShape } from './shapes.ts';
 import { themeOf, type Theme } from './theme.ts';
@@ -69,7 +69,8 @@ export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): Se
   const theme = themeOf(layout.view);
   const k = theme.scale;
   const [gapX, gapY] = layout.view?.spacing ?? [1, 1];
-  const measure = (t: string, size = theme.size.edge) => measureText(t, size, false, theme.widthFactor);
+  // Message labels, guards and delays are line labels (mono where the theme has it); an explicit size is body text.
+  const measure = (t: string, size?: number) => (size === undefined ? measureSecondary(t, theme.size.edge, theme) : measureText(t, size, false, theme.widthFactor));
   const bubbleSize = bubbleSizeFor(theme);
 
   // Participant header shapes, reusing the element shapes so every theme applies.
@@ -366,7 +367,7 @@ export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): Se
     const x0 = Math.min(...xs) - 12 * k;
     const x1 = Math.max(...xs) + 12 * k;
     const y1 = model.hideFootbox ? bottom : bottom + headH;
-    return { box: { x: x0, y: 0, w: x1 - x0, h: y1 + 8 * k }, label: measure(b.label, theme.size.container) };
+    return { box: { x: x0, y: 0, w: x1 - x0, h: y1 + 8 * k }, label: theme.containerTitle === 'caps' ? capsBlock(b.label, theme.size.container, theme) : measure(b.label, theme.size.container) };
   });
 
   const all: Box[] = [...heads.map((h) => h.box), ...feet.map((f) => f.box), ...notes.map((n) => n.box), ...groups.map((g) => g.box), ...boxes.map((b) => b.box), ...refs.map((r) => r.box)];

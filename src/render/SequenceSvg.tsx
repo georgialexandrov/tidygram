@@ -177,7 +177,9 @@ export function SequenceContent({ scene, ix }: { scene: SequenceScene; ix?: Inte
       ))}
       {scene.notes.map((n, i) => (
         <g key={`note${i}`}>
-          {theme.noteFold ? (
+          {theme.noteCallout ? (
+            <rect x={f(n.box.x)} y={f(n.box.y)} width={f(n.box.w)} height={f(n.box.h)} rx={f(r)} fill={c.noteFill} stroke={c.noteStroke} strokeWidth={theme.hairline} strokeDasharray={theme.dash.note} />
+          ) : theme.noteFold ? (
             <path
               d={`M${f(n.box.x)},${f(n.box.y)} H${f(n.box.x + n.box.w - 8 * k)} L${f(n.box.x + n.box.w)},${f(n.box.y + 8 * k)} V${f(n.box.y + n.box.h)} H${f(n.box.x)} Z M${f(n.box.x + n.box.w - 8 * k)},${f(n.box.y)} V${f(n.box.y + 8 * k)} H${f(n.box.x + n.box.w)}`}
               fill={c.noteFill}
@@ -190,7 +192,7 @@ export function SequenceContent({ scene, ix }: { scene: SequenceScene; ix?: Inte
               <path d={`M${f(n.box.x + 0.5)},${f(n.box.y + r)} V${f(n.box.y + n.box.h - r)}`} stroke={mix(c.noteStroke, c.noteText, 0.35)} strokeWidth={2.5 * Math.sqrt(k)} strokeLinecap="round" />
             </>
           )}
-          <Text theme={theme} block={n.text} cx={n.box.x + 12 * k} top={n.box.y + 7 * k} align="start" fill={c.noteText} />
+          <Text theme={theme} block={n.text} cx={n.box.x + 12 * k} top={n.box.y + 7 * k} align="start" fill={c.noteText} note />
         </g>
       ))}
       {scene.refs.map((ref, i) => (

@@ -32,6 +32,23 @@ export interface Theme {
   /** Corner radius of boxes (components, classes, cards); states and actions round more. */
   nodeRadius: number;
   containerTitle: 'centered' | 'caps';
+  /** Letter spacing of caps titles, in em. */
+  capsTracking: number;
+  /**
+   * A second, monospaced face for sublabels, technology lines, line labels and
+   * container eyebrows. `tracking` is the letter spacing of line labels, in em.
+   */
+  mono?: { font: string; tracking: number };
+  /** Kind tags: a small outlined chip (`CONT`, `IFACE`) in a box's top-left corner, instead of «stereotype» lines. */
+  typeTag: boolean;
+  /** Note text face (a serif italic callout); the theme's `font` when absent. */
+  noteFont?: string;
+  /** Stroke width of containers and rules, when thinner than `colors.lineWidth`. */
+  hairline?: number;
+  /** Arrowhead [length, width] in px: a plain filled triangle instead of the notched head. */
+  arrowSize?: [number, number];
+  /** Notes as dashed callouts in `noteFont`, not margin notes with a keyline. */
+  noteCallout?: boolean;
   arrow: 'filled' | 'chevron';
   noteFold: boolean;
   /** Show `«include»` as `include` in a chip. */
@@ -77,6 +94,10 @@ export interface Theme {
     layerTitle: string;
     /** The one accent: focus marks, Gantt bars, sequence numbers, timing waveforms. */
     accent: string;
+    /** Gantt bars (the plan); the accent then marks only progress. Without it, bars are accent. */
+    bar?: string;
+    /** The accent as small text on a box fill, when the accent itself is too faint for that (dark paper). */
+    accentText?: string;
     /** Text on a solid accent fill. */
     onAccent: string;
     /** Quiet panel fill: class header bands, Gantt weekends, sequence boxes, fragment tabs. */
@@ -87,6 +108,10 @@ export interface Theme {
     labelText: string;
     /** C4: people (the start of every story) solid, internal systems tinted, external grey. */
     c4: { personFill: string; personStroke: string; personText: string; personMuted: string; internalFill: string; internalStroke: string; externalFill: string; externalStroke: string };
+    /** Databases and storage, when they get their own quiet treatment. */
+    storage?: { fill: string; stroke: string };
+    /** Clouds and other outside things, when they get their own quiet treatment. */
+    external?: { fill: string; stroke: string };
     /** ArchiMate layer fills; text stays `text` on all of them. */
     archimate: Record<ArchimateLayer, string>;
   };
@@ -165,6 +190,8 @@ const classic: Theme = {
   containerRadius: 2,
   nodeRadius: 2.5,
   containerTitle: 'centered',
+  capsTracking: 0.08,
+  typeTag: false,
   arrow: 'filled',
   noteFold: true,
   plainLabels: false,
@@ -237,6 +264,8 @@ const modern: Theme = {
   containerRadius: 12,
   nodeRadius: 8,
   containerTitle: 'caps',
+  capsTracking: 0.08,
+  typeTag: false,
   arrow: 'filled',
   noteFold: false,
   plainLabels: true,
@@ -542,7 +571,137 @@ const primary = variant(
   },
 );
 
-export const THEMES: Record<string, Theme> = { modern, classic, midnight, editorial, blueprint, mono, primary };
+/** Palette of the paper themes: warm paper, near-black ink, one tangerine accent. */
+interface PaperTokens {
+  paper: string;
+  paper2: string;
+  card: string;
+  ink: string;
+  muted: string;
+  soft: string;
+  /** Hairline alpha over paper, and the solid rule. */
+  rule: number;
+  ruleSolid: string;
+  accent: string;
+  onAccent: string;
+  accentTint: number;
+  link: string;
+}
+
+const PAPER_SANS = "Geist, 'Inter', -apple-system, 'Helvetica Neue', sans-serif";
+const PAPER_MONO = "'Geist Mono', 'SF Mono', Menlo, monospace";
+const PAPER_SERIF = "'Instrument Serif', 'New York', Georgia, serif";
+
+/**
+ * Paper: an editorial figure. Warm paper, near-black ink, hairlines, mono
+ * sublabels and tracked-caps eyebrows, one accent for the thing to look at
+ * (people, roots, progress, broken rules). Boxes are cards with an ink
+ * outline; databases and outside things recede to a tint; no shadows.
+ */
+function paperTheme(name: string, label: string, t: PaperTokens): Theme {
+  const over = (colour: string, a: number) => mix(t.paper, colour, a);
+  const accentFill = over(t.accent, t.accentTint);
+  const tint = (a: number) => over(t.ink, a);
+  return variant(
+    name,
+    label,
+    {
+      background: t.paper,
+      text: t.ink,
+      muted: t.muted,
+      title: t.muted,
+      actorText: t.ink,
+      line: t.muted,
+      lineWidth: 1,
+      dependency: t.muted,
+      dependencyLabel: t.soft,
+      generalization: t.muted,
+      noteLink: t.ruleSolid,
+      shapeFill: t.card,
+      shapeStroke: t.ink,
+      actorFill: t.card,
+      actorStroke: t.ink,
+      actorGlyph: t.ink,
+      systemFill: tint(0.03),
+      systemStroke: tint(0.3),
+      systemGlyph: t.muted,
+      noteFill: t.paper2,
+      noteStroke: t.muted,
+      noteText: t.ink,
+      containerFill: tint(0.02),
+      containerStroke: t.ruleSolid,
+      nestedFill: t.paper,
+      nestedStroke: t.ruleSolid,
+      labelFill: t.paper,
+      warning: t.accent,
+      layerFills: [tint(0.015), tint(0.035), tint(0.055), tint(0.075)],
+      layerStroke: t.ruleSolid,
+      layerTitle: t.muted,
+      accent: t.accent,
+      bar: t.muted,
+      accentText: mix(t.accent, t.ink, 0.15),
+      onAccent: t.onAccent,
+      surface: t.paper2,
+      grid: over(t.ink, t.rule),
+      labelText: t.soft,
+      storage: { fill: tint(0.05), stroke: t.muted },
+      external: { fill: tint(0.03), stroke: tint(0.3) },
+      c4: { personFill: accentFill, personStroke: t.accent, personText: t.ink, personMuted: t.muted, internalFill: t.card, internalStroke: t.ink, externalFill: tint(0.03), externalStroke: tint(0.3) },
+      archimate: tints(t.card, 0.1),
+    },
+    {
+      font: PAPER_SANS,
+      widthFactor: 1.07,
+      size: { node: 12, note: 11, edge: 9, container: 8, actor: 11 },
+      nodeWeight: 600,
+      usecase: 'pill',
+      bendRadius: 8,
+      containerRadius: 8,
+      nodeRadius: 6,
+      containerTitle: 'caps',
+      capsTracking: 0.18,
+      mono: { font: PAPER_MONO, tracking: 0.06 },
+      typeTag: true,
+      noteFont: PAPER_SERIF,
+      noteCallout: true,
+      hairline: 0.8,
+      arrowSize: [8, 6],
+      dash: { dependency: '5 4', note: '4 3' },
+    },
+  );
+}
+
+const paper = paperTheme('paper', 'Paper (light)', {
+  paper: '#F5F5F5',
+  paper2: '#ECECEC',
+  card: '#FFFFFF',
+  ink: '#2D3142',
+  muted: '#4F5D75',
+  soft: '#5A6580',
+  rule: 0.12,
+  ruleSolid: '#BFC0C0',
+  accent: '#BF4520',
+  onAccent: '#FFFFFF',
+  accentTint: 0.08,
+  link: '#2E5AA8',
+});
+
+const paperDark = paperTheme('paper-dark', 'Paper (dark)', {
+  paper: '#2D3142',
+  paper2: '#393E53',
+  card: '#393E53',
+  ink: '#F5F5F5',
+  muted: '#BFC0C0',
+  soft: '#949EB2',
+  rule: 0.12,
+  ruleSolid: mix('#2D3142', '#BFC0C0', 0.25),
+  accent: '#F08A59',
+  onAccent: '#2D3142',
+  accentTint: 0.1,
+  link: '#739FDF',
+});
+
+export const THEMES: Record<string, Theme> = { modern, classic, midnight, editorial, blueprint, mono, primary, paper, 'paper-dark': paperDark };
 
 /** The theme a layout without `view.theme` gets. */
 export const DEFAULT_THEME = 'modern';

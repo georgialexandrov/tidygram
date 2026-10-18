@@ -3,7 +3,7 @@ import { layersOf, resolveAssignments } from '../layout/template/defs.ts';
 import { findViolations, type Violation } from '../layout/template/rules.ts';
 import type { Diagram } from '../model/types.ts';
 import type { Box } from './containers.ts';
-import { LINE_HEIGHT, measureText, textWidth, type TextBlock } from './measure.ts';
+import { capsBlock, LINE_HEIGHT, measureText, type TextBlock } from './measure.ts';
 import type { Theme } from './theme.ts';
 
 /**
@@ -91,8 +91,7 @@ export type TemplateMetrics = ReturnType<typeof templateMetrics>;
 export function titleBlock(label: string, theme: Theme): TextBlock {
   const size = theme.size.container;
   if (theme.containerTitle !== 'caps') return measureText(label, size, true, theme.widthFactor);
-  const upper = label.toUpperCase();
-  return { lines: [label], width: textWidth(upper, size, true, theme.widthFactor) + 0.08 * size * upper.length, height: size * LINE_HEIGHT, size };
+  return capsBlock(label, size, theme);
 }
 
 const fillAt = (theme: Theme, i: number, n: number) => {

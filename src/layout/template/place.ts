@@ -1,7 +1,7 @@
 import type { Diagram } from '../../model/types.ts';
 import { nodeBox, type Box, type Positions } from '../../scene/containers.ts';
 import { nodeShape, type NodeShape } from '../../scene/shapes.ts';
-import { measureText } from '../../scene/measure.ts';
+import { measureSecondary } from '../../scene/measure.ts';
 import { cleanRings, clearOfRing, fitRing, hexEdgeX, hexGeometry, innerNeeds, layeredBands, memberNeeds, RING_ASPECT, ringArea, ringCenter, templateMetrics, titleBlock, type RingShape, type TemplateMetrics } from '../../scene/template.ts';
 import type { Theme } from '../../scene/theme.ts';
 import type { LayerDef, TemplateSettings } from '../layout-file.ts';
@@ -65,7 +65,7 @@ function context(diagram: Diagram, template: TemplateSettings, theme: Theme, opt
     if (e.hidden || e.from === e.to || !near.has(e.from) || !near.has(e.to)) continue;
     flows.push(e.reversed ? [e.to, e.from] : [e.from, e.to]);
     if (e.label) {
-      const w = measureText(e.label, theme.size.edge, false, theme.widthFactor).width;
+      const w = measureSecondary(e.label, theme.size.edge, theme).width;
       for (const key of [`${e.from}|${e.to}`, `${e.to}|${e.from}`]) labels.set(key, Math.max(labels.get(key) ?? 0, w));
     }
   }

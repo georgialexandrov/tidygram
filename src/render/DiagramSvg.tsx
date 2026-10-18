@@ -4,7 +4,7 @@ import type { ArrowHead } from '../model/types.ts';
 import type { Box } from '../scene/containers.ts';
 import { frameRect } from '../scene/frame.ts';
 import { pointAt, roundedPath, trimEnd } from '../scene/geometry.ts';
-import { LINE_HEIGHT, textWidth, type TextBlock } from '../scene/measure.ts';
+import { capsBlock, LINE_HEIGHT, textWidth, type TextBlock } from '../scene/measure.ts';
 import type { Scene, SceneContainer, SceneEdge, SceneNode } from '../scene/scene.ts';
 import { mix, type Theme } from '../scene/theme.ts';
 import { NodeBody } from './nodes.tsx';
@@ -158,7 +158,9 @@ function NodeViewImpl({ n, theme, ix, selected, depth }: NodeProps) {
     const fold = 10 * k;
     body = (
       <>
-        {theme.noteFold ? (
+        {theme.noteCallout ? (
+          <rect x={f(x)} y={f(y)} width={f(w)} height={f(h)} rx={f(Math.min(6 * k, theme.nodeRadius))} fill={c.noteFill} stroke={sel ?? c.noteStroke} strokeWidth={theme.hairline ?? strokeWidth} strokeDasharray={theme.dash.note} />
+        ) : theme.noteFold ? (
           <>
             <path d={`M${f(x)},${f(y)} L${f(x + w - fold)},${f(y)} L${f(x + w)},${f(y + fold)} L${f(x + w)},${f(y + h)} L${f(x)},${f(y + h)} Z`} fill={c.noteFill} stroke={sel ?? c.noteStroke} strokeWidth={strokeWidth} strokeLinejoin="round" />
             <path d={`M${f(x + w - fold)},${f(y)} L${f(x + w - fold)},${f(y + fold)} L${f(x + w)},${f(y + fold)}`} fill={mix(c.noteFill, c.noteStroke, 0.25)} stroke={sel ?? c.noteStroke} strokeWidth={strokeWidth} strokeLinejoin="round" />
@@ -170,7 +172,7 @@ function NodeViewImpl({ n, theme, ix, selected, depth }: NodeProps) {
             <path d={`M${f(x + 0.5)},${f(y + Math.min(6 * k, theme.nodeRadius))} V${f(y + h - Math.min(6 * k, theme.nodeRadius))}`} stroke={sel ?? mix(c.noteStroke, c.noteText, 0.35)} strokeWidth={2.5 * Math.sqrt(k)} strokeLinecap="round" />
           </>
         )}
-        <Text theme={theme} block={shape.text} cx={x + 13 * k} top={y + 7 * k} align="start" fill={c.noteText} />
+        <Text theme={theme} block={shape.text} cx={x + 13 * k} top={y + 7 * k} align="start" fill={c.noteText} note />
       </>
     );
   }
@@ -225,7 +227,7 @@ function ContainerViewImpl({ c, theme, ix }: { c: SceneContainer; theme: Theme; 
   const d3 = kind === 'node' ? 8 * k : 0;
   return (
     <g data-container={c.id}>
-      <rect x={f(x)} y={f(y + d3)} width={f(w - d3)} height={f(h - d3)} rx={d3 ? 0 : f(st.radius)} fill={st.fill} stroke={st.stroke} strokeWidth={1} strokeDasharray={st.dash} />
+      <rect x={f(x)} y={f(y + d3)} width={f(w - d3)} height={f(h - d3)} rx={d3 ? 0 : f(st.radius)} fill={st.fill} stroke={st.stroke} strokeWidth={theme.hairline ?? 1} strokeDasharray={st.dash} />
       {d3 > 0 && (
         <path
           d={`M${f(x)},${f(y + d3)} L${f(x + d3)},${f(y)} H${f(x + w)} V${f(y + h - d3)} L${f(x + w - d3)},${f(y + h)} M${f(x + w - d3)},${f(y + d3)} L${f(x + w)},${f(y)}`}
@@ -265,8 +267,8 @@ function ContainerTitleImpl({ c, theme }: { c: SceneContainer; theme: Theme }) {
   }
   const size = theme.size.container;
   const caps = theme.containerTitle === 'caps';
-  const block: TextBlock = { lines: [c.label], width: 0, height: size * LINE_HEIGHT, size };
-  const textW = textWidth(caps ? c.label.toUpperCase() : c.label, size, true, theme.widthFactor) + (caps ? 0.08 * size * c.label.length : 0);
+  const block: TextBlock = caps ? capsBlock(c.label, size, theme) : { lines: [c.label], width: 0, height: size * LINE_HEIGHT, size };
+  const textW = caps ? block.width : textWidth(c.label, size, true, theme.widthFactor);
   const left = (caps ? x + 14 * k : x + w / 2 - textW / 2) + (c.titleShift ?? 0);
   const top = caps ? y + 10 * k + d3 : y + 6 * k;
   return (
@@ -364,7 +366,7 @@ function arrowHead(theme: Theme, kind: ArrowHead, tip: Point, from: Point, color
     return <polyline points={`${at(8 * k, 4.5 * k)} ${t} ${at(8 * k, -4.5 * k)}`} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />;
   }
   // A slim, notched head: sharp at the tip, light at the back, so it never looks heavier than the line.
-  const [l, hw, notch] = theme.plantuml ? [10 * k, 4 * k, 7 * k] : [9 * k, 3.75 * k, 7 * k];
+  const [l, hw, notch] = theme.arrowSize ? [theme.arrowSize[0] * k, (theme.arrowSize[1] / 2) * k, theme.arrowSize[0] * k] : theme.plantuml ? [10 * k, 4 * k, 7 * k] : [9 * k, 3.75 * k, 7 * k];
   return <polygon points={`${t} ${at(l, hw)} ${at(notch, 0)} ${at(l, -hw)}`} fill={color} stroke={color} strokeWidth={0.5} strokeLinejoin="miter" />;
 }
 
@@ -374,7 +376,7 @@ function headInset(theme: Theme, kind: ArrowHead): number {
   if (kind === 'triangle') return (theme.plantuml ? 14 : 12) * k;
   if (kind === 'diamond' || kind === 'diamondFilled') return 15 * k;
   if (kind === 'circle' || kind === 'circlePlus') return 8 * k;
-  if (kind === 'arrow') return theme.arrow === 'chevron' ? 0.5 * k : 6 * k;
+  if (kind === 'arrow') return theme.arrow === 'chevron' ? 0.5 * k : theme.arrowSize ? theme.arrowSize[0] * 0.7 * k : 6 * k;
   if (kind === 'dot') return 4 * k;
   return 0;
 }

@@ -8,7 +8,7 @@ import { planPorts, settleEnd, slideOnNode, untangle, type EdgePorts, type Port 
 import { attachOutline, outward } from './attach.ts';
 import { placeEndLabel, placeMidLabel, type LabelObstacles } from './labels.ts';
 import { containerPad, nodeShape, orientBars, type NodeShape } from './shapes.ts';
-import { measureText, type TextBlock } from './measure.ts';
+import { measureSecondary, type TextBlock } from './measure.ts';
 import { ROUTING, routeEdges, type RouteShape } from './route.ts';
 
 /** A container wall for the router: how far it reaches outside and inside the border (see `wallsFor`). */
@@ -613,7 +613,7 @@ function placeLabels(edges: SceneEdge[], reused: Map<string, SceneEdge>, nodes: 
     ];
     for (const [text, points, head, key] of ends) {
       if (!text || points.length < 2) continue;
-      const block = measureText(text, theme.size.edge, false, theme.widthFactor);
+      const block = measureSecondary(text, theme.size.edge, theme);
       const [x, y] = placeEndLabel(obstacles, e.edge.id, points, block, head === 'none' ? 2 * k : 14 * Math.sqrt(k), k);
       e[key] = { text: block, x, y };
       obstacles.labels.push(boxAt(x, y, block.width, block.height));
@@ -622,7 +622,7 @@ function placeLabels(edges: SceneEdge[], reused: Map<string, SceneEdge>, nodes: 
   // User-dragged labels are fixed: place them first so the others avoid them.
   const withLabel = fresh.filter((e) => e.edge.label).sort((a, b) => Number(!layout.edges[a.edge.id]?.label) - Number(!layout.edges[b.edge.id]?.label) || pathLength(a.points) - pathLength(b.points));
   for (const e of withLabel) {
-    const text = measureText(labelText(e.edge.label!, theme), theme.size.edge, false, theme.widthFactor);
+    const text = measureSecondary(labelText(e.edge.label!, theme), theme.size.edge, theme);
     const { w, h } = chip(text);
     const [mx, my] = pointAt(e.points, 0.5);
     const user = layout.edges[e.edge.id]?.label;

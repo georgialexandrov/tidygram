@@ -40,7 +40,7 @@ describe('theme contrast (WCAG AA for every text/background pair a theme draws)'
         pairs.push(['C4 internal (white on blue)', c.c4.personText, c.c4.internalFill], ['C4 external (white on grey)', c.c4.personText, c.c4.externalFill], ['C4 internal caption', c.c4.personMuted, c.c4.internalFill]);
       } else {
         pairs.push(['C4 internal name', c.text, c.c4.internalFill], ['C4 internal caption', c.muted, c.c4.internalFill], ['C4 external name', c.text, c.c4.externalFill], ['C4 external caption', c.muted, c.c4.externalFill]);
-        pairs.push(['JSON scalars (accent) on boxes', c.accent, c.shapeFill]);
+        pairs.push(['JSON scalars (accent) on boxes', c.accentText ?? c.accent, c.shapeFill]);
       }
       const failing = pairs.filter(([, fg, back]) => contrast(fg, back) < AA).map(([what, fg, back]) => `${what}: ${fg} on ${back} = ${contrast(fg, back).toFixed(2)}`);
       expect(failing).toEqual([]);

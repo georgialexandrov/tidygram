@@ -1,3 +1,5 @@
+import type { Theme } from './theme.ts';
+
 /**
  * Deterministic text measurement using Helvetica advance widths (AFM, per
  * 1000 em). The CLI has no DOM to measure with, and positions in layout.json
@@ -28,6 +30,32 @@ export interface TextBlock {
   width: number;
   height: number;
   size: number;
+  /** Set in the theme's mono face (sublabels, line labels, eyebrows). */
+  mono?: boolean;
+  /** Letter spacing in em; part of `width`. */
+  tracking?: number;
+}
+
+/** Advance of a monospace glyph in em (Geist Mono, SF Mono and Menlo all sit at 0.6). */
+const MONO_ADVANCE = 0.6;
+
+/**
+ * Secondary text: in the theme's mono face when it has one (measured by
+ * character count, since every mono font agrees), else as the sans.
+ */
+export function measureSecondary(text: string, size: number, theme: Theme, opts: { bold?: boolean; tracking?: number } = {}): TextBlock {
+  if (!theme.mono) return measureText(text, size, opts.bold, theme.widthFactor);
+  const tracking = opts.tracking ?? theme.mono.tracking;
+  const lines = text.split('\n');
+  const width = Math.max(0, ...lines.map((l) => [...l].length * size * (MONO_ADVANCE + tracking)));
+  return { lines, width, height: lines.length * size * LINE_HEIGHT, size, mono: true, tracking: tracking || undefined };
+}
+
+/** A container title or section eyebrow: tracked caps (mono where the theme has it). The block keeps the label's case; the renderer upcases. */
+export function capsBlock(label: string, size: number, theme: Theme): TextBlock {
+  const upper = label.toUpperCase();
+  if (theme.mono) return { ...measureSecondary(upper, size, theme, { tracking: theme.capsTracking }), lines: [label] };
+  return { lines: [label], width: textWidth(upper, size, true, theme.widthFactor) + theme.capsTracking * size * upper.length, height: size * LINE_HEIGHT, size, tracking: theme.capsTracking };
 }
 
 export function measureText(text: string, size: number, bold = false, factor = 1): TextBlock {
