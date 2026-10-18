@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "vite",
     "build:demo": "DEMO=1 vite build",
+    "record:demo": "node scripts/record-demo.mjs",
     "render": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

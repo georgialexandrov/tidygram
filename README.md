@@ -6,6 +6,14 @@ lives in a sidecar, `diagram.layout.json`, keyed by the element ids in the
 source. When the author edits the source, your positions survive and new
 elements are placed next to what they connect to.
 
+## Demo
+
+[![tidygram demo](docs/media/demo.gif)](docs/media/demo.mp4)
+
+[Watch the MP4](docs/media/demo.mp4) (higher quality). Regenerate both with `DEMO_BASE=/x/ pnpm build:demo && pnpm record:demo`.
+
+**Try it in your browser:** <https://georgi.alexandrov.dev/tidygram/>
+
 ## Supported PlantUML diagrams
 
 | Type | Status | Fixture |

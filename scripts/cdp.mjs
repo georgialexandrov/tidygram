@@ -24,6 +24,7 @@ export async function withChrome(port, fn) {
     ws.addEventListener('message', (m) => {
       const msg = JSON.parse(m.data);
       if (msg.id && pending.has(msg.id)) pending.get(msg.id)(msg);
+      globalThis.__cdpOnEvent?.(msg);
       if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(msg.params.args.map((a) => a.value ?? a.description).join(' '));
       if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
     });
