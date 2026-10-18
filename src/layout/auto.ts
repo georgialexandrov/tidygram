@@ -563,6 +563,16 @@ function seedFromSource(diagram: Diagram, next: LayoutFile, shapes: Map<string, 
 export async function ensureLayout(diagram: Diagram, layout: LayoutFile, mode: LayoutMode = 'fill'): Promise<LayoutFile> {
   // Ordered diagrams (sequence, ...) compute their layout on every build; only dragged columns are stored.
   if (diagram.special) return mode === 'fill' ? layout : { ...layout, nodes: {}, edges: {} };
+  // Drawings keep the file's geometry: only dragged shapes are stored; Auto does nothing, Reset goes back to the file.
+  if (diagram.drawing) {
+    const next: LayoutFile = { ...layout, nodes: mode === 'reset' ? {} : { ...layout.nodes }, edges: {} };
+    const shapes = shapesFor(diagram, themeOf(layout.view));
+    for (const n of diagram.nodes) {
+      const home = n.sourceBox && sourceCentre(n, shapes.get(n.id)!);
+      if (home && !next.nodes[n.id]) next.nodes[n.id] = { x: home.x, y: home.y };
+    }
+    return mode === 'auto' ? layout : next;
+  }
   // A template owns the arrangement: new elements go into their layer, Auto re-places; Reset drops the template too.
   if (layout.template) {
     if (mode === 'fill') return refreshTemplate(diagram, layout);

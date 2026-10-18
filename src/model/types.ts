@@ -109,6 +109,8 @@ export interface DNode {
    * figure size; the figure is centred on the box.
    */
   sourceBox?: SourceBox;
+  /** Drawing mode (`Diagram.drawing`): the cell's own draw.io style, drawn as the file styles it. */
+  drawn?: DrawnCell;
   /** Label may wrap to the box width (draw.io `whiteSpace=wrap`); only with `sourceBox`. */
   wrap?: boolean;
   line: number;
@@ -173,7 +175,15 @@ export interface DEdge {
   /** Where the source attaches the ends (draw.io `exitX/exitY`, `entryX/entryY`: fractions of the box); become `from`/`to` like `sourceVia`. */
   sourceFrom?: [number, number];
   sourceTo?: [number, number];
+  /** Drawing mode (`Diagram.drawing`): the line's own draw.io style and label offset. */
+  drawn?: DrawnCell;
   line: number;
+}
+
+/** What a drawing keeps of a draw.io cell: the raw style string and the label's geometry offset. */
+export interface DrawnCell {
+  style: string;
+  labelAt?: [number, number];
 }
 
 export interface Diagram {
@@ -189,6 +199,14 @@ export interface Diagram {
    * timing) carry their own model here; `nodes`/`edges` stay empty for them.
    */
   special?: SequenceModel | GanttModel | TimingModel;
+  /**
+   * A draw.io file our export wrote as a drawing of a sequence, Gantt or
+   * timing diagram (`pumlDrawing=` on the layer cell). The scene keeps the
+   * file's geometry, no auto layout, no routing: see `buildDrawingScene`.
+   */
+  drawing?: 'sequence' | 'gantt' | 'timing';
+  /** Page background of a drawing (draw.io `background`). */
+  background?: string;
 }
 
 // ---- sequence ----------------------------------------------------------------------------------

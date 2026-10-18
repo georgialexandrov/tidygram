@@ -951,6 +951,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   }, []);
 
   const template = layout.template;
+  /** A drawing keeps the file's geometry: re-layout, fit and templates are off (see `buildDrawingScene`). */
+  const drawingNote = doc?.diagram.drawing ? `This file is a drawing of a ${doc.diagram.drawing} diagram; open the original to re-layout` : undefined;
   /** Elements no signal placed (they sit in the default layer); recomputed only when the template changes. */
   const openIds = useMemo(() => (doc && template && !doc.diagram.special ? unassigned(doc.diagram, template) : []), [doc, template]);
   const templateScene = scene?.kind === 'graph' ? scene.template : undefined;
@@ -1204,7 +1206,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         )}
         <span className="sep" aria-hidden="true" />
         <div className="keys joined" role="group" aria-label="Layout">
-          <button disabled={blank} onClick={() => void runLayout('auto')} title="Re-layout everything you haven't placed by hand">
+          <button disabled={blank || !!drawingNote} onClick={() => void runLayout('auto')} title={drawingNote ?? "Re-layout everything you haven't placed by hand"}>
             Auto<span className="wide-only"> layout</span>
           </button>
           <button disabled={blank} onClick={() => void runLayout('reset')} title={doc && hasSourceLayout(doc.diagram) ? "Discard the layout and go back to the file's" : 'Discard the layout and start over'}>
@@ -1230,11 +1232,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           </button>
         </div>
         <span className="sep" aria-hidden="true" />
-        <div className="keys" role="group" aria-label="Template">
+        <div className="keys" role="group" aria-label="Template" title={drawingNote}>
           <TemplatePicker
             kind={template?.kind ?? null}
             rules={template && doc ? rulesOf(template, doc.diagram) : null}
-            disabled={blank || !!doc?.diagram.special}
+            disabled={blank || !!doc?.diagram.special || !!drawingNote}
             onPick={pickTemplate}
             onRules={setRules}
           />
@@ -1269,7 +1271,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             )}
             <option value="window">This window</option>
           </select>
-          <button disabled={!frame || !!busy?.endsWith('…')} onClick={() => void fitFrame()} title="Re-arrange everything to fill the frame (undoable)">
+          <button disabled={!frame || !!busy?.endsWith('…') || !!drawingNote} onClick={() => void fitFrame()} title={drawingNote ?? 'Re-arrange everything to fill the frame (undoable)'}>
             Fit to frame
           </button>
         </div>

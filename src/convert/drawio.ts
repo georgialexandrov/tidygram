@@ -190,7 +190,7 @@ export function viewOnly(layout: LayoutFile, warnings: ParseWarning[]): LayoutFi
 }
 
 /** One uncompressed page; `backdrop` cells go before the default layer (drawn under it), `background` is the page colour. */
-export function mxfile(cells: string[], options: { backdrop?: string[]; background?: string } = {}): string {
+export function mxfile(cells: string[], options: { backdrop?: string[]; background?: string; drawing?: 'sequence' | 'gantt' | 'timing' } = {}): string {
   const background = options.background ? ` background="${attr(options.background)}"` : '';
   return [
     '<mxfile host="puml-layout">',
@@ -199,7 +199,8 @@ export function mxfile(cells: string[], options: { backdrop?: string[]; backgrou
     '      <root>',
     '        <mxCell id="0" />',
     ...(options.backdrop ?? []).map((c) => `        ${c}`),
-    '        <mxCell id="1" parent="0" />',
+    // `pumlDrawing` on the layer: draw.io keeps cell styles, so the mark survives a save there; our reader keeps the file's geometry.
+    `        <mxCell id="1" parent="0"${options.drawing ? ` style="pumlDrawing=${options.drawing};"` : ''} />`,
     ...cells.map((c) => `        ${c}`),
     '      </root>',
     '    </mxGraphModel>',
