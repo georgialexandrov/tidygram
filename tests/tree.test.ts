@@ -106,6 +106,39 @@ describe('tree layout', () => {
     for (const e of diagram.edges) if (e.from !== 'Website relaunch') expect(at(e.to).y).toBeGreaterThan(at(e.from).y + at(e.from).h);
   });
 
+  it('wbs: `left to right direction` puts the root at the left and each level in a column', async () => {
+    const src = read('wbs.puml').replace('@startwbs', '@startwbs\nleft to right direction');
+    const { scene, diagram } = await built('x', parsePuml(src).diagram);
+    const at = (id: string) => scene.nodes.find((n) => n.node.id === id)!.box;
+    const root = at('Website relaunch');
+    for (const e of diagram.edges) {
+      const a = at(e.from);
+      const b = at(e.to);
+      expect(b.x).toBeGreaterThanOrEqual(a.x + a.w);
+    }
+    expect(['Discovery', 'Design', 'Build', 'Launch'].every((id) => at(id).x > root.x + root.w)).toBe(true);
+    const ys = ['Discovery', 'Design', 'Build', 'Launch'].map((id) => at(id).y);
+    expect([...ys].sort((p, q) => p - q)).toEqual(ys);
+    const boxes = scene.nodes.map((n) => n.box);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(overlaps(boxes[i]!, boxes[j]!, 0)).toBe(false);
+    // Elbow lines leave the right side of the parent.
+    expect(scene.edges.every((e) => e.points[0]![0] >= at(e.edge.from).x + at(e.edge.from).w - 0.5)).toBe(true);
+  });
+
+  it('mindmap: `top to bottom direction` hangs every branch below the root', async () => {
+    const src = read('mindmap.puml').replace(/(@startmindmap[^\n]*)/, '$1\ntop to bottom direction');
+    const { scene, diagram } = await built('x', parsePuml(src).diagram);
+    const at = (id: string) => scene.nodes.find((n) => n.node.id === id)!.box;
+    for (const e of diagram.edges) expect(at(e.to).y).toBeGreaterThanOrEqual(at(e.from).y + at(e.from).h);
+    const kids = diagram.edges.filter((e) => e.from === 'Launch plan').map((e) => at(e.to));
+    const mid = (kids[0]!.x + kids[kids.length - 1]!.x + kids[kids.length - 1]!.w) / 2;
+    expect(Math.abs(mid - (at('Launch plan').x + at('Launch plan').w / 2))).toBeLessThanOrEqual(1);
+    const boxes = scene.nodes.map((n) => n.box);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(overlaps(boxes[i]!, boxes[j]!, 0)).toBe(false);
+    // Curves leave the bottom of the parent.
+    expect(scene.edges.every((e) => Math.abs(e.points[0]![1] - (at(e.edge.from).y + at(e.edge.from).h)) < 0.5)).toBe(true);
+  });
+
   it('dragging a topic carries its branch, in one edit', async () => {
     const { diagram, layout } = await built('mindmap.puml');
     const ids = subtreeIds(diagram, 'Marketing');

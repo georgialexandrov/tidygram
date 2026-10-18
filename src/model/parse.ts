@@ -842,6 +842,7 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
   const stack: DNode[] = [];
   const ids = new Map<string, number>();
   let direction: Diagram['direction'] = family === 'wbs' ? 'TB' : 'LR';
+  let directionFixed = false;
   let directive: 'left' | 'right' | undefined;
   let multiline: { node: DNode; body: string[] } | undefined;
   for (const { no, raw, text } of lines) {
@@ -861,10 +862,12 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
     }
     if (/^top\s+to\s+bottom\s+direction$/i.test(text)) {
       direction = 'TB';
+      directionFixed = true;
       continue;
     }
     if (/^left\s+to\s+right\s+direction$/i.test(text)) {
       direction = 'LR';
+      directionFixed = true;
       continue;
     }
     const m = /^([*+\-#]+)(_)?(\[#?\w+\])?\s*(.*)$/.exec(text);
@@ -897,5 +900,5 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
     }
     stack[depth - 1] = node;
   }
-  return { diagram: { family, direction, nodes, containers: [], edges }, warnings };
+  return { diagram: { family, direction, ...(directionFixed ? { directionFixed } : {}), nodes, containers: [], edges }, warnings };
 }

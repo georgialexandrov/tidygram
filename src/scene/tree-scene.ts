@@ -1,5 +1,5 @@
 import type { DEdge, Diagram } from '../model/types.ts';
-import { treeLine } from '../layout/tree.ts';
+import { treeGrowth, treeLine } from '../layout/tree.ts';
 import type { Scene, SceneEdge, SceneNode } from './scene.ts';
 import type { Theme } from './theme.ts';
 
@@ -8,11 +8,12 @@ export function treeScene(diagram: Diagram, theme: Theme, nodes: SceneNode[], vi
   const byId = new Map(nodes.map((n) => [n.node.id, n]));
   const hasParent = new Set(visible.map((e) => e.to));
   const family = diagram.family === 'wbs' ? 'wbs' : 'mindmap';
+  const growth = treeGrowth(diagram);
   const edges: SceneEdge[] = visible.flatMap((e) => {
     const a = byId.get(e.from);
     const b = byId.get(e.to);
     if (!a || !b) return [];
-    const { points, path } = treeLine(family, a.box, b.box, { fromRoot: !hasParent.has(e.from), boxless: b.node.stereotype === 'boxless', scale: theme.scale });
+    const { points, path } = treeLine(family, a.box, b.box, { fromRoot: !hasParent.has(e.from), boxless: b.node.stereotype === 'boxless', scale: theme.scale, growth });
     return [{ edge: e, kind: e.kind, points, path, head: 'none', tail: 'none', dashed: e.dashed, via: [] } satisfies SceneEdge];
   });
   const xs = [...nodes.flatMap((n) => [n.box.x, n.box.x + n.box.w]), ...edges.flatMap((e) => e.points.map((p) => p[0]))];
