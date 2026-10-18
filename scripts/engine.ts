@@ -14,7 +14,8 @@ import { applyTemplate } from '../src/layout/template/index.ts';
 import { parseDiagram } from '../src/model/diagram.ts';
 import { DiagramSvg } from '../src/render/DiagramSvg.tsx';
 import { loadAvoid } from '../src/scene/avoid.ts';
-import { measureQuality } from '../src/scene/quality.ts';
+import { countCrossings, measureQuality } from '../src/scene/quality.ts';
+import { pathLength } from '../src/scene/geometry.ts';
 import { buildScene } from '../src/scene/scene.ts';
 
 const args = process.argv.slice(2);
@@ -63,15 +64,18 @@ for (const file of files) {
       writeFileSync(svg, renderToStaticMarkup(createElement(DiagramSvg, { scene })));
       if (png) execFileSync('sh', ['scripts/png.sh', svg, svg.replace(/\.svg$/, '.png'), '1400']);
       const { details, ...numbers } = q;
-      rows.push({ name, ...numbers, aspect: Math.round(q.aspect * 100) / 100, ms: Math.round(ms), details });
+      // Crossings between lines, and the longest line as a share of the picture's width.
+      const crossings = countCrossings(scene.edges.map((e) => e.points));
+      const longest = Math.max(0, ...scene.edges.map((e) => pathLength(e.points))) / Math.max(1, scene.bounds.w);
+      rows.push({ name, ...numbers, crossings, longest: Math.round(longest * 100) / 100, aspect: Math.round(q.aspect * 100) / 100, ms: Math.round(ms), details });
     }
   }
 }
 
-const cols = ['containerCrossings', 'titleCrossings', 'nodeCrossings', 'labelOverlaps', 'labelLineOverlaps', 'bends', 'jogs', 'skewEnds', 'aspect', 'ms'];
-const short = ['cont', 'title', 'node', 'lab', 'labLn', 'bends', 'jogs', 'skew', 'aspect', 'ms'];
+const cols = ['containerCrossings', 'titleCrossings', 'nodeCrossings', 'labelOverlaps', 'labelLineOverlaps', 'bends', 'jogs', 'skewEnds', 'crossings', 'longest', 'aspect', 'ms'];
+const short = ['cont', 'title', 'node', 'lab', 'labLn', 'bends', 'jogs', 'skew', 'cross', 'long', 'aspect', 'ms'];
 console.log(['name'.padEnd(48), ...short.map((s) => s.padStart(6))].join(''));
 for (const r of rows) console.log([String(r.name).padEnd(48), ...cols.map((c) => String(r[c]).padStart(6))].join(''));
 const total = (c: string) => rows.reduce((s, r) => s + (typeof r[c] === 'number' ? (r[c] as number) : 0), 0);
-console.log(['TOTAL'.padEnd(48), ...cols.slice(0, 8).map((c) => String(total(c)).padStart(6))].join(''));
+console.log(['TOTAL'.padEnd(48), ...cols.slice(0, 9).map((c) => String(total(c)).padStart(6))].join(''));
 writeFileSync(join(outDir, 'metrics.json'), JSON.stringify(rows, null, 1));

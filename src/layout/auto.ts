@@ -2,7 +2,7 @@ import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk.bundled.js';
 import { elk } from './elk.ts';
 import type { DNode, Diagram } from '../model/types.ts';
 import { ancestry, containerBoxes, nodeBox, overlaps, sourceCentre, type Box, type Positions } from '../scene/containers.ts';
-import { containerPad, nodeShape, type NodeShape, type Pad } from '../scene/shapes.ts';
+import { containerPad, nodeShape, uprightBar, type NodeShape, type Pad } from '../scene/shapes.ts';
 import { measureText } from '../scene/measure.ts';
 import { themeFor, themeOf, type Theme } from '../scene/theme.ts';
 import { chosenEnds, emptyLayout, sideOfFraction, type EdgeLayout, type LayoutFile } from './layout-file.ts';
@@ -11,6 +11,7 @@ import { pathLength } from '../scene/geometry.ts';
 import { countCrossings, measureQuality } from '../scene/quality.ts';
 import { buildScene } from '../scene/scene.ts';
 import { refreshTemplate, relayoutTemplate } from './template/index.ts';
+import { isUseCaseDiagram, useCaseLayouts } from './usecase.ts';
 
 const GAP = 24;
 
@@ -35,6 +36,10 @@ export interface ElkVariant {
   aspectRatio?: number;
   /** Gap between elements in the same layer, and between layers. */
   spacing?: { node: number; layer: number };
+  /** Node placement by network simplex: lines between layers straighter, at times a wider layout. */
+  straight?: boolean;
+  /** Not ELK: the use-case layout with these grid shapes (for debugging output only). */
+  usecase?: string;
 }
 
 /**
@@ -93,6 +98,7 @@ export async function elkPositions(
       ...spacing,
       ...wrapping,
       'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+      ...(variant.straight ? { 'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX' } : {}),
       'elk.edgeLabels.placement': 'CENTER',
       // Also how unconnected parts are packed: side by side up to this ratio, not stacked.
       'elk.aspectRatio': String(variant.aspectRatio ?? 1.6),
@@ -123,20 +129,28 @@ export async function elkPositions(
     if (t && t.parent === n.parent && t.kind !== 'note') riders.set(t.id, [...(riders.get(t.id) ?? []), n]);
   }
   const riding = new Set([...riders.values()].flat().map((n) => n.id));
+  // `note right of` means "beside the flow" in the source's top-down reading. When auto layout turns a
+  // top-down source left to right, the right side is where the next state is (the note would sit in its
+  // line's way): the layout is transposed, and so are the notes' sides.
+  const transposed = variant.direction === 'RIGHT' && diagram.direction !== 'LR';
+  const TRANSPOSE = { right: 'bottom', left: 'top', top: 'left', bottom: 'right' } as const;
+  const sideOf = (n: DNode) => (transposed ? TRANSPOSE[n.attachedTo!.side] : n.attachedTo!.side);
   const extra = new Map<string, { left: number; right: number; top: number; bottom: number }>();
   for (const [id, notes] of riders) {
     const e = { left: 0, right: 0, top: 0, bottom: 0 };
     for (const n of notes) {
       const s = shapes.get(n.id)!;
-      const side = n.attachedTo!.side;
+      const side = sideOf(n);
       if (side === 'left' || side === 'right') e[side] = Math.max(e[side], s.w + GAP);
       else e[side] = Math.max(e[side], s.h + GAP);
     }
     extra.set(id, e);
   }
+  // Fork/join bars stand upright in a left-to-right flow (the scene orients them the same way: `orientBars`).
+  const flowOf = (n: DNode) => (variant.hierarchy === 'separate' && n.parent ? (variant.innerDirection ?? variant.direction) : variant.direction);
   for (const n of diagram.nodes) {
     if (riding.has(n.id)) continue;
-    const s = shapes.get(n.id)!;
+    const s = n.kind === 'fork' && flowOf(n) === 'RIGHT' ? uprightBar(shapes.get(n.id)!) : shapes.get(n.id)!;
     const e = extra.get(n.id);
     elkNodes.set(`n:${n.id}`, { id: `n:${n.id}`, width: s.w + (e ? e.left + e.right : 0), height: s.h + (e ? e.top + e.bottom : 0) });
   }
@@ -186,7 +200,7 @@ export async function elkPositions(
           positions[id] = c;
           for (const n of riders.get(id)!) {
             const ns = shapes.get(n.id)!;
-            const side = n.attachedTo!.side;
+            const side = sideOf(n);
             positions[n.id] =
               side === 'right' ? { x: c.x + s.w / 2 + GAP + ns.w / 2, y: c.y }
               : side === 'left' ? { x: c.x - s.w / 2 - GAP - ns.w / 2, y: c.y }
@@ -232,26 +246,42 @@ export async function autoPositions(diagram: Diagram, shapes: Map<string, NodeSh
   for (const direction of directions) {
     const turn = direction === own.direction ? 1 : 0.9;
     variants.push({ variant: { direction, hierarchy: 'include' }, cost: turn });
+    variants.push({ variant: { direction, hierarchy: 'include', straight: true }, cost: turn * 0.95 });
     variants.push({ variant: { direction, hierarchy: 'include', wrapping: true, aspectRatio: 1.6 }, cost: turn * 0.7 });
-    // Containers in the cross direction reshape a lot, but read against a direction the source asked for.
-    if (diagram.containers.length && !fixed) {
+    // Containers in the cross direction reshape a lot. When the source fixes the direction, the main flow
+    // keeps it and only composite interiors turn (a top-down state machine with wide, short composites).
+    if (diagram.containers.length && (!fixed || diagram.family === 'state')) {
       // Laid out container by container, ELK ignores lines that leave a container: the more of those, the worse it places their ends.
       const across = diagram.edges.filter((e) => parentOf(e.from) !== parentOf(e.to)).length / Math.max(1, diagram.edges.length);
       variants.push({ variant: { direction, hierarchy: 'separate', innerDirection: direction === 'DOWN' ? 'RIGHT' : 'DOWN' }, cost: (turn * 0.9) / (1 + across) });
     }
   }
-  const results: { variant: ElkVariant & { rows?: number }; cost: number; positions: Positions | undefined }[] = await Promise.all(
+  const results: { variant: ElkVariant & { rows?: number; columns?: number }; cost: number; positions: Positions | undefined }[] = await Promise.all(
     variants.map(async ({ variant, cost }) => ({ variant, cost, positions: await elkPositions(diagram, shapes, theme, variant).catch(() => undefined) })),
   );
+  // Long columns (top-down layouts) cut the same way into two or three columns side by side, each read
+  // top to bottom like a newspaper's. Also when the source fixes top-down: the flow still reads downwards.
+  for (const r of [...results]) {
+    if (!r.positions || r.variant.direction !== 'DOWN' || r.variant.wrapping) continue;
+    for (const cols of [2, 3]) {
+      for (const w of wrapColumns(diagram, r.positions, shapes, containerPad(theme), cols, 56 * theme.scale)) {
+        results.push({ variant: { ...r.variant, columns: cols }, cost: (r.cost * 0.8) / (1 + w.backwards), positions: w.positions });
+      }
+    }
+  }
   // Long rows cut into two or three, each still reading left to right (ELK's own wrapping can start a row at the right).
   for (const r of [...results]) {
     // Not when the source asks for left to right (C4 LAYOUT_LEFT_RIGHT, `left to right direction`): it wants the strip.
-    if (!r.positions || r.variant.direction !== 'RIGHT' || r.variant.wrapping || diagram.direction === 'LR') continue;
+    if (!r.positions || r.variant.direction !== 'RIGHT' || r.variant.wrapping || r.variant.usecase || diagram.direction === 'LR') continue;
     for (const rows of [2, 3]) {
       for (const w of wrapRows(diagram, r.positions, shapes, containerPad(theme), rows, 56 * theme.scale)) {
         results.push({ variant: { ...r.variant, rows }, cost: (r.cost * 0.8) / (1 + w.backwards), positions: w.positions });
       }
     }
+  }
+  // Use-case diagrams: actors in side columns, use cases in their packages between them (usecase.ts).
+  if (isUseCaseDiagram(diagram)) {
+    for (const u of useCaseLayouts(diagram, shapes, theme, containerPad(theme))) results.push({ variant: { direction: 'RIGHT', hierarchy: 'include', usecase: u.name }, cost: 1.1, positions: u.positions });
   }
   const debug = typeof process !== 'undefined' && process.env?.AUTO_DEBUG;
   const scored = results
@@ -262,27 +292,86 @@ export async function autoPositions(diagram: Diagram, shapes: Map<string, NodeSh
   // containers laid out on their own): route the front runners and judge them on the real thing.
   const avoid = loadedAvoid();
   if (avoid && scored.length > 1) {
-    let best = scored[0]!;
-    let bestScore = -Infinity;
-    for (const c of scored.slice(0, debug === 'all' ? 99 : 4)) {
-      const trial: LayoutFile = { ...emptyLayout(), view, nodes: Object.fromEntries(Object.entries(c.positions).map(([id, p]) => [id, { x: p.x, y: p.y }])) };
-      const scene = buildScene(diagram, trial, avoid);
-      const q = measureQuality(scene, diagram);
-      const lines = Math.max(1, scene.edges.length);
-      const frame = Math.max(scene.bounds.w / TARGET.max, scene.bounds.h);
-      const aspect = scene.bounds.w / Math.max(1, scene.bounds.h);
-      const off = Math.abs(Math.log(aspect / Math.min(2, Math.max(4 / 3, aspect))));
-      const crossings = countCrossings(scene.edges.map((e) => e.points));
-      const length = scene.edges.reduce((sum, e) => sum + pathLength(e.points), 0) / lines / frame;
-      const faults = q.nodeCrossings + q.containerCrossings + q.titleCrossings + q.labelOverlaps;
-      const score = (c.cost * 1000) / frame / (1 + (4 * crossings) / lines) / (1 + (0.15 * q.bends) / lines) / (1 + length) / (1 + off) / (1 + (0.5 * faults) / lines);
-      if (debug) console.log(JSON.stringify(c.variant), `proxy ${c.score.toFixed(3)} routed ${score.toFixed(3)} frame ${Math.round(frame)} x ${crossings} bends ${q.bends} len ${length.toFixed(2)} aspect ${aspect.toFixed(2)}`);
-      if (score > bestScore) [best, bestScore] = [c, score];
+    // The use-case layout's grid shapes are all routed: their differences only show once routed.
+    // So are ELK's own layouts (no rows/columns cut in by us): they are what the stable choice falls back on.
+    // And each base layout's best cut into rows/columns (by the proxy), so one family can't crowd out another.
+    const base = (v: ElkVariant & { rows?: number; columns?: number }) => JSON.stringify({ ...v, rows: undefined, columns: undefined });
+    const bestCut = new Set<unknown>();
+    const seenBase = new Set<string>();
+    for (const c of scored) {
+      if (!c.variant.rows && !c.variant.columns) continue;
+      if (seenBase.has(base(c.variant))) continue;
+      seenBase.add(base(c.variant));
+      bestCut.add(c);
     }
-    return best.positions;
+    const finalists = debug === 'all' ? scored : scored.filter((c, i) => i < 4 || c.variant.usecase || (!c.variant.rows && !c.variant.columns) || bestCut.has(c));
+    const pick = typeof process !== 'undefined' ? process.env?.AUTO_PICK : undefined;
+    const routed = finalists.map((c) => {
+      const trial: LayoutFile = { ...emptyLayout(), view, nodes: Object.fromEntries(Object.entries(c.positions).map(([id, p]) => [id, { x: p.x, y: p.y }])) };
+      const r = routedScore(diagram, buildScene(diagram, trial, avoid), c.variant.usecase ? undefined : c.variant.direction);
+      if (debug) console.log(JSON.stringify(c.variant), `proxy ${c.score.toFixed(3)} routed ${(c.cost * r.score).toFixed(3)} ${r.summary}`);
+      return { c, score: c.cost * r.score };
+    });
+    // Debugging: AUTO_PICK=<text> takes the first candidate whose description contains it.
+    const forced = pick ? routed.find((r) => JSON.stringify(r.c.variant).includes(pick)) : undefined;
+    if (forced) return forced.c.positions;
+    const winner = chooseStable(routed).c;
+    return winner.variant.usecase ? winner.positions : polish(diagram, winner.positions, shapes, theme, view, winner.variant.direction);
   }
   if (debug) for (const c of scored) console.log(JSON.stringify(c.variant), c.score.toFixed(3));
   return scored[0]?.positions ?? elkPositions(diagram, shapes, theme, own);
+}
+
+/**
+ * How good a routed candidate looks, larger is better. The primary criterion is size: how large the
+ * picture is drawn in a 16:9 window (1 / the window height it needs). Everything else divides it:
+ *
+ * - crossings, `1 + 6·crossings/lines` (CROSS): the strongest penalty; a crossing per six lines halves it;
+ * - bends, `1 + 0.4·bends/lines`: a layout whose lines snake round things reads worse than a slightly
+ *   smaller one with straight lines (0.15 before 2026-10-18 let 32-bend state machines beat 13-bend ones);
+ * - line length, `1 + mean length/window`;
+ * - long backward runs, `1 + 1.5·Σ(run against the flow beyond half the picture)/picture` (LONG_BACK): a
+ *   line from the end of the flow back to its start; wrapped rows' short hand-overs cost nothing. (The
+ *   total backward run, printed as `back`, isn't scored: it pushed LR-fixed C4 back into a 7:1 strip.)
+ * - proportions, `1 + 2·|log(aspect / clamp(aspect, 4:3, 2:1))|`: outside 4:3–2:1 the window shows a
+ *   strip (a 14:1 strip must not tie with a 2:1 wrapped layout however long the latter's lines);
+ * - faults, `1 + 0.5·faults/lines` (lines through boxes/containers/titles, labels on boxes).
+ *
+ * The candidate's prior (`cost`: own direction 1, turned 0.9, wrapped 0.7, use-case layout 1.1, ...)
+ * multiplies the result. `chooseStable` then breaks near-ties (MARGIN) by that prior.
+ */
+export function routedScore(diagram: Diagram, scene: ReturnType<typeof buildScene>, direction?: 'RIGHT' | 'DOWN'): { score: number; summary: string } {
+  const q = measureQuality(scene, diagram);
+  const lines = Math.max(1, scene.edges.length);
+  const frame = Math.max(scene.bounds.w / TARGET.max, scene.bounds.h);
+  const aspect = scene.bounds.w / Math.max(1, scene.bounds.h);
+  const off = Math.abs(Math.log(aspect / Math.min(2, Math.max(4 / 3, aspect))));
+  const crossings = countCrossings(scene.edges.map((e) => e.points));
+  const length = scene.edges.reduce((sum, e) => sum + pathLength(e.points), 0) / lines / frame;
+  const axis = direction === 'RIGHT' ? 0 : 1;
+  const back = direction ? scene.edges.reduce((sum, e) => sum + Math.max(0, e.points[0]![axis]! - e.points[e.points.length - 1]![axis]!), 0) / frame : 0;
+  // A line running back more than half the picture against the flow (the end of one row back to a state at
+  // the start of another): only the part beyond half counts, so wrapped rows' short hand-overs are free.
+  const span = axis === 0 ? scene.bounds.w : scene.bounds.h;
+  const longBack = direction ? scene.edges.reduce((sum, e) => sum + Math.max(0, e.points[0]![axis]! - e.points[e.points.length - 1]![axis]! - span / 2), 0) / span : 0;
+  const faults = q.nodeCrossings + q.containerCrossings + q.titleCrossings + q.labelOverlaps;
+  const score = 1000 / frame / (1 + (CROSS * crossings) / lines) / (1 + (0.4 * q.bends) / lines) / (1 + length) / (1 + 2 * off) / (1 + LONG_BACK * longBack) / (1 + (0.5 * faults) / lines);
+  return { score, summary: `frame ${Math.round(frame)} x ${crossings} bends ${q.bends} len ${length.toFixed(2)} back ${back.toFixed(2)} long-back ${longBack.toFixed(2)} aspect ${aspect.toFixed(2)}` };
+}
+
+/**
+ * The winner, made stable: candidates scoring within `MARGIN` of the best are treated as tied, and the
+ * tie goes to the one with the strongest prior (the source's own direction over a turned one, unwrapped
+ * over wrapped, the use-case layout over ELK), then to the score. Without it, a routing tweak that moves
+ * two very different layouts' scores by a percent flips the picture.
+ */
+const MARGIN = 0.03;
+const LONG_BACK = 1.5;
+const CROSS = 6;
+function chooseStable<T extends { c: { cost: number }; score: number }>(routed: T[]): T {
+  const top = Math.max(...routed.map((r) => r.score));
+  const near = routed.filter((r) => r.score >= top * (1 - MARGIN));
+  return near.sort((a, b) => b.c.cost - a.c.cost || b.score - a.score)[0]!;
 }
 
 /**
@@ -398,6 +487,110 @@ export function wrapRows(diagram: Diagram, positions: Positions, shapes: Map<str
     }
     return [{ positions: out, backwards }];
   });
+}
+
+/**
+ * `wrapRows` turned on its side: a top-down layout cut at clean horizontal gaps into `cols` columns, each
+ * moved right of the previous one and up to the top. Done by transposing, cutting rows, transposing back.
+ */
+export function wrapColumns(diagram: Diagram, positions: Positions, shapes: Map<string, NodeShape>, pad: Pad, cols: number, gap: number): { positions: Positions; backwards: number }[] {
+  const flip = (p: Positions): Positions => Object.fromEntries(Object.entries(p).map(([id, q]) => [id, { x: q.y, y: q.x }]));
+  const turned = new Map([...shapes].map(([id, s]) => [id, { ...s, w: s.h, h: s.w }]));
+  // A container's title padding is at the top; turned, it would be at the left: spread it evenly instead.
+  const even = (pad.top + pad.bottom) / 2;
+  return wrapRows(diagram, flip(positions), turned, { side: even, top: pad.side, bottom: pad.side }, cols, gap).map((w) => ({ ...w, positions: flip(w.positions) }));
+}
+
+/**
+ * Last pass on the chosen layout of a small diagram: each top-level unit (an element, or a container with
+ * everything in it) tries to slide into the free space towards the middle of the picture, all the way or
+ * half way, on each axis. A move is kept only when the routed picture has no more crossings, bends or
+ * faults than before and scores better (`routedScore`): it closes the holes layered layouts leave without
+ * the new crossings a blind compaction makes. Bounded: ≤ 40 elements, ≤ 80 routed tries.
+ */
+function polish(diagram: Diagram, positions: Positions, shapes: Map<string, NodeShape>, theme: Theme, view: LayoutFile['view'], direction: 'RIGHT' | 'DOWN'): Positions {
+  const avoid = loadedAvoid();
+  if (!avoid || diagram.nodes.length > 40 || diagram.containers.some((c) => c.kind === 'swimlane')) return positions;
+  const pad = containerPad(theme);
+  const topOf = (id: string): string => {
+    // A note travels with what it annotates.
+    const note = diagram.nodes.find((n) => n.id === id && n.kind === 'note' && n.attachedTo);
+    if (note && diagram.nodes.some((n) => n.id === note.attachedTo!.id && n.parent === note.parent)) id = note.attachedTo!.id;
+    let at = id;
+    for (let p = diagram.nodes.find((n) => n.id === id)?.parent; p; p = diagram.containers.find((c) => c.id === p)?.parent) at = p;
+    return at;
+  };
+  const members = new Map<string, string[]>();
+  for (const n of diagram.nodes) if (positions[n.id]) members.set(topOf(n.id), [...(members.get(topOf(n.id)) ?? []), n.id]);
+  const judge = (at: Positions) => {
+    const trial: LayoutFile = { ...emptyLayout(), view, nodes: Object.fromEntries(Object.entries(at).map(([id, p]) => [id, { x: p.x, y: p.y }])) };
+    const scene = buildScene(diagram, trial, avoid);
+    const q = measureQuality(scene, diagram);
+    const aspect = scene.bounds.w / Math.max(1, scene.bounds.h);
+    return { off: Math.abs(Math.log(aspect / Math.min(2, Math.max(4 / 3, aspect)))), score: routedScore(diagram, scene, direction).score, crossings: countCrossings(scene.edges.map((e) => e.points)), bends: q.bends, faults: q.nodeCrossings + q.containerCrossings + q.titleCrossings + q.labelOverlaps + q.labelLineOverlaps };
+  };
+  const unitBoxes = (at: Positions) => {
+    const boxes = containerBoxes(diagram, at, shapes, pad);
+    const map = new Map<string, Box>();
+    for (const [id, list] of members) {
+      let b: Box | undefined = boxes.get(id);
+      if (!b) for (const m of list) b = b ? union(b, nodeBox(at[m]!, shapes.get(m)!)) : nodeBox(at[m]!, shapes.get(m)!);
+      map.set(id, b!);
+    }
+    return map;
+  };
+  let at: Positions = Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, { ...p }]));
+  let best = judge(at);
+  let tries = 0;
+  const gap = 40 * theme.scale;
+  for (let round = 0; round < 2 && tries < 80; round++) {
+    let improved = false;
+    for (const id of members.keys()) {
+      for (const axis of ['x', 'y'] as const) {
+        if (tries >= 80) break;
+        const boxes = unitBoxes(at);
+        const all = [...boxes.values()];
+        const lo = Math.min(...all.map((b) => b[axis]));
+        const hi = Math.max(...all.map((b) => b[axis] + (axis === 'x' ? b.w : b.h)));
+        const b = boxes.get(id)!;
+        const size = axis === 'x' ? b.w : b.h;
+        // Towards what it connects to, or else towards the middle of the picture.
+        const mine = members.get(id)!;
+        const others = diagram.edges.flatMap((e) => (mine.includes(e.from) && !mine.includes(e.to) ? [e.to] : mine.includes(e.to) && !mine.includes(e.from) ? [e.from] : [])).filter((o) => at[o]);
+        const mid = others.length ? others.reduce((sum, o) => sum + at[o]![axis], 0) / others.length : (lo + hi) / 2;
+        if (Math.abs(b[axis] + size / 2 - mid) < 12 * theme.scale) continue;
+        const sign = b[axis] + size / 2 > mid ? -1 : 1;
+        // Free run towards the middle: up to the nearest unit sharing a band across the axis.
+        const across = (o: Box) => (axis === 'x' ? o.y < b.y + b.h + gap && b.y < o.y + o.h + gap : o.x < b.x + b.w + gap && b.x < o.x + o.w + gap);
+        let room = Infinity;
+        for (const [oid, o] of boxes) {
+          if (oid === id || !across(o)) continue;
+          const d = sign < 0 ? b[axis] - (o[axis] + (axis === 'x' ? o.w : o.h)) - gap : o[axis] - (b[axis] + size) - gap;
+          if (d > -1) room = Math.min(room, d);
+        }
+        room = Math.min(room, Math.abs(b[axis] + size / 2 - mid));
+        for (const f of [1, 0.5]) {
+          const step = sign * room * f;
+          if (Math.abs(step) < 12 * theme.scale) continue;
+          // Never onto another unit (the quality measure doesn't count overlapping boxes).
+          const moved: Box = axis === 'x' ? { ...b, x: b.x + step } : { ...b, y: b.y + step };
+          if ([...boxes].some(([oid, o]) => oid !== id && overlaps(moved, o, 16 * theme.scale))) continue;
+          const next: Positions = { ...at };
+          for (const m of members.get(id)!) next[m] = { ...at[m]!, [axis]: at[m]![axis] + step };
+          tries++;
+          const r = judge(next);
+          if (r.crossings <= best.crossings && r.bends <= best.bends && r.faults <= best.faults && r.off <= best.off + 0.01 && r.score > best.score * 1.005) {
+            at = next;
+            best = r;
+            improved = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!improved) break;
+  }
+  return at;
 }
 
 const union = (a: Box, b: Box): Box => {

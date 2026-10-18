@@ -7,7 +7,7 @@ import { borderCrossings, overlapArea, pathHitsBox } from './quality.ts';
 import { planPorts, settleEnd, slideOnNode, untangle, type EdgePorts, type Port } from './ports.ts';
 import { attachOutline, outward } from './attach.ts';
 import { placeEndLabel, placeMidLabel, type LabelObstacles } from './labels.ts';
-import { containerPad, nodeShape, type NodeShape } from './shapes.ts';
+import { containerPad, nodeShape, orientBars, type NodeShape } from './shapes.ts';
 import { measureText, type TextBlock } from './measure.ts';
 import { ROUTING, routeEdges, type RouteShape } from './route.ts';
 
@@ -93,12 +93,17 @@ export interface BuildOptions {
 /** Turns the parsed model + layout into absolute geometry. Every node must already have a position. */
 export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, options: BuildOptions = {}): Scene {
   const theme = themeOf(layout.view);
-  const shapes = new Map(diagram.nodes.map((n) => [n.id, nodeShape(n, theme)]));
   const positions: Positions = {};
   for (const n of diagram.nodes) {
     const p = layout.nodes[n.id];
     if (p) positions[n.id] = { x: p.x, y: p.y };
   }
+  // Bars keep their orientation through a drag (their other lines aren't re-routed until it ends).
+  const before = options.previous && options.dirty ? new Map(options.previous.nodes.map((n) => [n.node.id, n])) : undefined;
+  const shapes = orientBars(diagram, positions, new Map(diagram.nodes.map((n) => [n.id, nodeShape(n, theme)])), before && ((id) => {
+    const n = before.get(id);
+    return n ? n.box.h > n.box.w : undefined;
+  }));
 
   const nodes: SceneNode[] = diagram.nodes
     .filter((n) => positions[n.id])
@@ -419,7 +424,10 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   };
   let routes = routeLines(routed);
   // Lines that ran into one spot get spots of their own, and everything is routed again so nudging sees the
-  // new ends. Full builds only: while dragging, the dragged lines keep the plain route until release.
+  // new ends. Full builds only: while dragging, the dragged lines keep the plain route until release. (Done
+  // live, it needs a second routing of the dragged lines on nearly every frame: +1.3 ms median per drag
+  // frame on food-delivery, 8.8 -> 10.1 ms, measured 2026-10-18; reusing last frame's spots instead can
+  // lock a line to a stale side for the rest of the drag.)
   if (!reused.size && routed.length > 1) {
     const ctx = { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, scale: theme.scale };
     // Twice at most: the second routing can bring two other ends together.

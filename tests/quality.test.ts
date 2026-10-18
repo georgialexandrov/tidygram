@@ -7,7 +7,7 @@ import { emptyLayout } from '../src/layout/layout-file.ts';
 import { parseDiagram } from '../src/model/diagram.ts';
 import type { Diagram } from '../src/model/types.ts';
 import { loadAvoid, type Avoid } from '../src/scene/avoid.ts';
-import { borderCrossings, measureQuality, pathHitsBox, type Quality } from '../src/scene/quality.ts';
+import { borderCrossings, countCrossings, measureQuality, pathHitsBox, type Quality } from '../src/scene/quality.ts';
 import { applyTemplate } from '../src/layout/template/index.ts';
 import { pointAt } from '../src/scene/geometry.ts';
 import { buildScene } from '../src/scene/scene.ts';
@@ -60,8 +60,10 @@ describe('picture quality over every fixture', () => {
     const sum = (k: 'bends' | 'jogs' | 'skewEnds') => results.reduce((n, r) => n + r.q[k], 0);
     // Measured 2026-10-18: bends 466, jogs 17, skew ends 9 (actors with many lines); before this pass 571 / 54 / 10.
     // Then (spread ends, actor ports, wrapped rows): bends 479 (the state machine now wraps into rows: +18), jogs 18, skew ends 0.
-    expect(sum('bends')).toBeLessThanOrEqual(500);
-    expect(sum('jogs')).toBeLessThanOrEqual(20);
+    // Then (use-case layout, state composites across, upright bars, network-simplex candidates, routed score
+    // weighs bends, routed polish of the winner): bends 407, jogs 12.
+    expect(sum('bends')).toBeLessThanOrEqual(415);
+    expect(sum('jogs')).toBeLessThanOrEqual(14);
     expect(sum('skewEnds')).toBeLessThanOrEqual(1);
   });
 
@@ -179,5 +181,69 @@ describe('templates', () => {
       return a && b && layer.get(e.from) === layer.get(e.to) && Math.abs(a.anchor.cy - b.anchor.cy) < 1 && a.anchor.cx > b.anchor.cx;
     });
     expect(backwards.map((e) => e.id)).toEqual([]);
+  });
+});
+
+describe('state machines', () => {
+  const routed = async (file: string) => {
+    const { diagram } = parseDiagram(readFileSync(join(root, file), 'utf8'), file);
+    const layout = await ensureLayout(diagram, emptyLayout(), 'auto');
+    const scene = buildScene(diagram, layout, avoid);
+    return { diagram, scene, q: measureQuality(scene, diagram) };
+  };
+  /** The longest run of one line against the reading direction (right to left), as a share of the width. */
+  const longestBack = (scene: ReturnType<typeof buildScene>) => Math.max(0, ...scene.edges.map((e) => e.points[0]![0] - e.points[e.points.length - 1]![0])) / scene.bounds.w;
+
+  it('PlantUML: compact, in flow order, few bends, no line running back across the picture', async () => {
+    const { scene, q } = await routed('state.puml');
+    // Before (2026-10-18 morning): 2.48:1, 32 bends, 2 crossings, Paying → choice ran back over the whole width.
+    expect(q.aspect).toBeLessThanOrEqual(2);
+    expect(q.aspect).toBeGreaterThan(1.2);
+    expect(q.bends).toBeLessThanOrEqual(16);
+    expect(countCrossings(scene.edges.map((e) => e.points))).toBe(0);
+    expect(longestBack(scene)).toBeLessThan(0.5);
+  });
+
+  it('Mermaid (top-down fixed): wider than a column, no more bends than before', async () => {
+    const { scene, q } = await routed('mermaid/state.mmd');
+    // Before: 0.98:1 (ELK wrapping, flow jumbled), 30 bends, 4 crossings.
+    expect(q.aspect).toBeGreaterThan(1.2);
+    expect(q.aspect).toBeLessThanOrEqual(2);
+    expect(q.bends).toBeLessThanOrEqual(28);
+    expect(countCrossings(scene.edges.map((e) => e.points))).toBeLessThanOrEqual(3);
+  });
+
+  it('fork/join bars lie across the flow: upright when their lines run sideways', async () => {
+    const { scene } = await routed('mermaid/state.mmd');
+    const bars = scene.nodes.filter((n) => n.node.kind === 'fork');
+    expect(bars.length).toBeGreaterThan(0);
+    for (const b of bars) {
+      const ends = scene.edges.filter((e) => e.edge.from === b.node.id || e.edge.to === b.node.id);
+      const sideways = ends.every((e) => {
+        const p = e.edge.from === b.node.id ? e.points[0]! : e.points[e.points.length - 1]!;
+        return Math.abs(p[0] - b.box.x) < 1.5 || Math.abs(p[0] - b.box.x - b.box.w) < 1.5;
+      });
+      // Every line meets an upright bar on its long sides, a flat one on top or bottom.
+      if (b.box.h > b.box.w) expect(sideways, b.node.id).toBe(true);
+    }
+  });
+});
+
+describe('Mermaid class', () => {
+  it('is tighter without new crossings: holes closed only where the routed picture improves', async () => {
+    const file = 'mermaid/class.mmd';
+    const { diagram } = parseDiagram(readFileSync(join(root, file), 'utf8'), file);
+    const scene = buildScene(diagram, await ensureLayout(diagram, emptyLayout(), 'auto'), avoid);
+    const q = measureQuality(scene, diagram);
+    // Before (HEAD f08f0f3): 1 crossing, 9 bends, Customer and Repository stranded far from Order.
+    expect(countCrossings(scene.edges.map((e) => e.points))).toBe(0);
+    expect(q.bends).toBeLessThanOrEqual(8);
+    // No two boxes on top of each other.
+    for (let i = 0; i < scene.nodes.length; i++) {
+      for (let j = i + 1; j < scene.nodes.length; j++) {
+        const [a, b] = [scene.nodes[i]!.box, scene.nodes[j]!.box];
+        expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h, `${scene.nodes[i]!.node.id} on ${scene.nodes[j]!.node.id}`).toBe(false);
+      }
+    }
   });
 });

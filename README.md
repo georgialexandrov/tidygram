@@ -536,8 +536,38 @@ Per type:
 
 - Parse: `src/model/parse.ts` (actors, use cases, nested containers, notes,
   relations; unsupported lines become warnings, never errors).
-- Layout: ELK layered for the first layout and for unpinned nodes
-  (`src/layout/auto.ts`); new nodes go next to their neighbours.
+- Layout: the first layout and Auto layout (`src/layout/auto.ts`) lay out
+  several candidates, route them, and keep the best; new nodes go next to
+  their neighbours. Candidates: ELK layered in both directions (unless the
+  source fixes one), with network-simplex node placement, ELK's wrapping,
+  containers laid out across the flow, long rows cut into 2–3 rows and long
+  columns into 2–3 columns (each still reading in flow order). Use-case
+  diagrams also get the use-case layout (below). Scoring, in `routedScore`:
+  how large the picture is drawn in a 16:9 window, divided by penalties for
+  crossings (strongest), bends, line length, lines running back across more
+  than half the picture, proportions outside 4:3–2:1 and faults; scores
+  within 3 % count as a tie, won by the more expected layout (the source's
+  direction, unwrapped), so a routing tweak doesn't flip the picture. The
+  winner of a small diagram (≤ 40 elements) is then polished: each element
+  or container slides into free space towards what it connects to, kept only
+  when the routed picture has no more crossings, bends or faults and scores
+  better. `AUTO_DEBUG=1` prints every candidate's numbers.
+- Use-case diagrams (`src/layout/usecase.ts`, description diagrams with
+  actors and mostly use cases): actors who start things on the left, called
+  systems on the right (by arrow direction and role words: the label's head
+  noun — "Payment Gateway", not "Bank Clerk" — or a `<<system>>`-like
+  stereotype), generalisation families stacked as one block; use cases in a
+  grid inside their package, packages in a grid inside their boundary;
+  package order tried exhaustively (≤ 5), use cases ordered by barycentre
+  against the actor columns, then improved by swaps and moves scored on
+  estimated routes (length, include/extend double, crossings, runs through
+  boxes, actor fans that interleave); notes beside what they annotate. Six
+  grid shapes nearest 16:10 are optimised and routed with the ELK
+  candidates; a stored layout always wins (it's only Auto/first layout).
+- State diagrams: fork/join bars lie across the flow (upright when their
+  lines run sideways, `orientBars` in `src/scene/shapes.ts`); `note right
+  of` turns with the layout when a top-down machine is laid out left to
+  right.
 - Lines: libavoid (Adaptagrams) orthogonal routing with nudging, compiled to
   WASM, re-run on every pointer move (~8 ms for the fixture).
 - Text is measured with a fixed Helvetica width table so the CLI and the
@@ -553,8 +583,9 @@ Measured in Chrome on the fixture (36 elements, 45 lines), `node scripts/perf.mj
 | React commit (unchanged elements are memoized) | ~4–8 ms (7.5 ms with the fixture's modern theme at 260%) |
 | full re-route + nudging on release | ~17 ms |
 
-Opening a diagram: 30–40 ms in the editor with a sidecar, ~150 ms when ELK
-lays it out first (food-delivery: 145 ms of ELK); `node scripts/smoke-types.mjs`
+Opening a diagram: 30–40 ms in the editor with a sidecar; a first layout
+routes its candidates: 0.1–0.4 s for most fixtures, ~0.9 s for
+food-delivery (use-case layout; Node, 2026-10-18); `node scripts/smoke-types.mjs`
 opens all 31 fixtures and drags/switches pages in ~10 s.
 
 Fit to frame: ~0.6 s, 16 ELK layouts in a pool of Web Workers

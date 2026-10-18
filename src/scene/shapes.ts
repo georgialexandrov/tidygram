@@ -1,4 +1,4 @@
-import type { DNode, NodeKind } from '../model/types.ts';
+import type { DNode, Diagram, NodeKind } from '../model/types.ts';
 import { LINE_HEIGHT, measureText, type TextBlock } from './measure.ts';
 import { archimateLayer, type Theme } from './theme.ts';
 
@@ -456,4 +456,40 @@ export const CONTAINER_PAD: Pad = { side: 20, top: 34, bottom: 20 };
 export function containerPad(theme: Theme): Pad {
   const k = theme.scale;
   return { side: CONTAINER_PAD.side * k, top: CONTAINER_PAD.top * k, bottom: CONTAINER_PAD.bottom * k };
+}
+
+/** A fork/join bar standing upright: its length along y. */
+export function uprightBar(shape: NodeShape): NodeShape {
+  if (shape.h >= shape.w) return shape;
+  return { ...shape, w: shape.h, h: shape.w, anchor: { ...shape.anchor, w: shape.anchor.h, h: shape.anchor.w } };
+}
+
+/**
+ * Fork/join bars lie across the flow: upright when their lines mostly run sideways (a left-to-right
+ * layout), flat otherwise. Decided from where the bar's neighbours are, so it follows any layout, drags
+ * included. `keep` can pin a bar's current orientation (true = upright), e.g. during a drag.
+ */
+export function orientBars(diagram: Diagram, positions: Record<string, { x: number; y: number }>, shapes: Map<string, NodeShape>, keep?: (id: string) => boolean | undefined): Map<string, NodeShape> {
+  const bars = diagram.nodes.filter((n) => n.kind === 'fork' && positions[n.id]);
+  if (!bars.length) return shapes;
+  const out = new Map(shapes);
+  for (const b of bars) {
+    const kept = keep?.(b.id);
+    let upright = kept;
+    if (upright === undefined) {
+      const p = positions[b.id]!;
+      let dx = 0;
+      let dy = 0;
+      for (const e of diagram.edges) {
+        const other = e.from === b.id ? e.to : e.to === b.id ? e.from : undefined;
+        const q = other !== undefined ? positions[other] : undefined;
+        if (!q || other === b.id) continue;
+        dx += Math.abs(q.x - p.x);
+        dy += Math.abs(q.y - p.y);
+      }
+      upright = dx > dy * 1.2;
+    }
+    if (upright) out.set(b.id, uprightBar(shapes.get(b.id)!));
+  }
+  return out;
 }

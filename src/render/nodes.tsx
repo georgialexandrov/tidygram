@@ -49,7 +49,7 @@ export function NodeBody({ n, theme, stroke, strokeWidth, depth }: { n: SceneNod
       return <polygon points={`${f(cx)},${f(y)} ${f(x + w)},${f(y + r)} ${f(cx)},${f(y + h)} ${f(x)},${f(y + r)}`} {...props} fill={theme.plantuml ? c.shapeFill : c.surface} stroke={stroke ?? (theme.plantuml ? line : c.line)} strokeLinejoin="round" />;
     }
     case 'fork':
-      return <rect x={f(x)} y={f(y)} width={f(w)} height={f(h)} rx={f(h / 2)} fill={stroke ?? c.text} />;
+      return <rect x={f(x)} y={f(y)} width={f(w)} height={f(h)} rx={f(Math.min(w, h) / 2)} fill={stroke ?? c.text} />;
     case 'state':
       return <StateBox n={n} theme={theme} stroke={line} strokeWidth={strokeWidth} />;
     case 'class':
