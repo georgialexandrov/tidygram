@@ -48,11 +48,23 @@ export interface ParseResult {
    */
   pages?: { key: string; name: string }[];
   page?: number;
+  /**
+   * C4 files with system or container boundaries: the zoom levels they can
+   * be shown at (`src/model/c4-views.ts`), and the key of the one `diagram`
+   * shows (undefined: the diagram as written). Each view's layout lives in
+   * the sidecar's `views` map under its key.
+   */
+  views?: { key: string; label: string }[];
+  view?: string;
 }
 
-/** Which page of a multi-page file to read: a 0-based index, or a page id or name. Default: the first. */
+/**
+ * Which page of a multi-page file to read: a 0-based index, or a page id or name. Default: the first.
+ * `view`: a C4 zoom level (`context`, `container:<id>`, `component:<id>`); one the file doesn't offer is ignored with a warning.
+ */
 export interface ParseOptions {
   page?: number | string;
+  view?: string;
 }
 
 /** Diagram types that need a different layout model; recognised so we can say so. */
@@ -716,6 +728,8 @@ export function parsePuml(source: string): ParseResult {
     if (boundary && call[3]) {
       const id = positional[0]!.trim();
       addContainer(id, /Node/.test(name) ? 'node' : 'boundary', unquote(positional[1]) || id, lineNo, named.type);
+      const level = ({ System_Boundary: 'system', Container_Boundary: 'container', Enterprise_Boundary: 'enterprise', Boundary: 'boundary' } as const)[name as 'Boundary'];
+      if (level) containers.get(id)!.c4Boundary = level;
       return true;
     }
 

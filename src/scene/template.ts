@@ -1,4 +1,4 @@
-import type { LayerDef, Point, TemplateKind, TemplateSettings } from '../layout/layout-file.ts';
+import { bandsKind, type LayerDef, type Point, type TemplateKind, type TemplateSettings } from '../layout/layout-file.ts';
 import { layersOf, resolveAssignments } from '../layout/template/defs.ts';
 import { findViolations, type Violation } from '../layout/template/rules.ts';
 import type { Diagram } from '../model/types.ts';
@@ -550,7 +550,7 @@ export function buildTemplateScene(diagram: Diagram, template: TemplateSettings,
   const members = membersByLayer(assigned, boxes);
   const scene: TemplateScene = { kind: template.kind, layers, assigned, bands: [], hexagons: [], rings: [], violations: findViolations(diagram, template, assigned), bounds: { x: 0, y: 0, w: 0, h: 0 } };
   const parts: Box[] = [];
-  if (template.kind === 'layered') {
+  if (bandsKind(template.kind)) {
     scene.bands = layeredBands(layers, members, theme);
   } else if (template.kind === 'hexagonal') {
     Object.assign(scene, hexGeometry(layers, members, theme));
@@ -573,7 +573,7 @@ export function buildTemplateScene(diagram: Diagram, template: TemplateSettings,
  * driving left, driven right).
  */
 export function regionAt(t: TemplateScene, [x, y]: Point, portBand = 0): string | undefined {
-  if (t.kind === 'layered') {
+  if (bandsKind(t.kind)) {
     if (!t.bands.length) return undefined;
     for (let i = 0; i < t.bands.length - 1; i++) {
       const a = t.bands[i]!.box;

@@ -5,7 +5,7 @@ import { Popover } from './Popover.tsx';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { subtreeIds } from '../layout/tree.ts';
 import { ensureLayout, hasSourceLayout, type LayoutMode } from '../layout/auto.ts';
-import { emptyLayout, pageLayout, parseLayout, serializeLayout, withPageLayout, type LayoutFile, type Point, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
+import { emptyLayout, pageLayout, parseLayout, serializeLayout, sliceLayout, withSliceLayout, type LayoutFile, type Point, type TemplateKind, type TemplateRules } from '../layout/layout-file.ts';
 import { applyTemplate, dropIntoTemplate, removeTemplate, settleTemplate, unassigned } from '../layout/template/index.ts';
 import { rulesOf } from '../layout/template/defs.ts';
 import { regionAt, type TemplateScene } from '../scene/template.ts';
@@ -35,6 +35,7 @@ import type { AnchorShape } from '../scene/geometry.ts';
 import type { Scene } from '../scene/scene.ts';
 import { addAll, boxFrom, clickSelect, marqueeSelect } from './selection.ts';
 import { FilePicker } from './FilePicker.tsx';
+import { useViewParam, ViewSwitcher } from './ViewSwitcher.tsx';
 
 interface Doc {
   file: string;
@@ -46,6 +47,9 @@ interface Doc {
   /** Multi-page draw.io: every page, and the index of the one on screen. */
   pages?: { key: string; name: string }[];
   page?: number;
+  /** C4 zoom levels the file offers, and the one on screen (undefined: as written). */
+  views?: { key: string; label: string }[];
+  view?: string;
 }
 
 /** −/+ stepper; clicking the value resets to 100%. */
@@ -268,6 +272,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const [file, setFile] = useState<string | null>(() => new URLSearchParams(location.search).get('file'));
   /** draw.io page id (`?page=`); undefined = the first page, whose layout is the sidecar's top level. */
   const [page, setPage] = useState<string | undefined>(() => new URLSearchParams(location.search).get('page') ?? undefined);
+  const [c4view, setC4View] = useViewParam();
   const [doc, setDoc] = useState<Doc | null>(null);
   const [layout, setLayout] = useState<LayoutFile>(emptyLayout);
   const [error, setError] = useState<string | null>(null);
@@ -310,8 +315,12 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const pageKeyRef = useRef<string | undefined>(undefined);
   const pageRef = useRef(page);
   pageRef.current = page;
+  /** C4 view asked for, and the one loaded (its sidecar key under `views`). */
+  const c4viewRef = useRef(c4view);
+  c4viewRef.current = c4view;
+  const viewKeyRef = useRef<string | undefined>(undefined);
   /** The full sidecar with `next` as the current page: what is written, exported and shown in Source. */
-  const sidecarWith = useCallback((next: LayoutFile) => withPageLayout(sidecarRef.current, pageKeyRef.current, next), []);
+  const sidecarWith = useCallback((next: LayoutFile) => withSliceLayout(sidecarRef.current, pageKeyRef.current, viewKeyRef.current, next), []);
   const fileRef = useRef(file);
   fileRef.current = file;
   const viewRef = useRef(view);
@@ -374,7 +383,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         const body = await readDoc(target);
         const t1 = performance.now();
         perf.record('open: fetch', t1 - t0);
-        const parsed = parseDiagram(body.source, target, { page: pageRef.current });
+        const parsed = parseDiagram(body.source, target, { page: pageRef.current, view: c4viewRef.current });
         const t2 = performance.now();
         perf.record('open: parse', t2 - t1);
         // The first page lives at the sidecar's top level; others under `pages` by key.
@@ -387,9 +396,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             setError('layout.json is not valid JSON, ignoring it until it is fixed');
             return;
           }
-          base = pageLayout(sidecarRef.current, pageKey);
+          base = sliceLayout(sidecarRef.current, pageKey, parsed.view);
         }
         pageKeyRef.current = pageKey;
+        viewKeyRef.current = parsed.view;
         const next = await ensureLayout(parsed.diagram, base, 'fill');
         perf.record(body.layout ? 'open: layout (sidecar)' : 'open: layout (first)', performance.now() - t2);
         if (what === 'all') {
@@ -402,7 +412,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         } else {
           undoStack.current.push(layoutRef.current);
         }
-        setDoc({ file: target, source: body.source, diagram: parsed.diagram, warnings: parsed.warnings, unsupported: parsed.unsupported, pages: parsed.pages, page: parsed.page });
+        setDoc({ file: target, source: body.source, diagram: parsed.diagram, warnings: parsed.warnings, unsupported: parsed.unsupported, pages: parsed.pages, page: parsed.page, views: parsed.views, view: parsed.view });
         setLayout(next);
         setError(null);
         // Nothing to place, nothing to remember: a blank file gets no sidecar.
@@ -431,13 +441,14 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     else url.searchParams.set('page', page);
     history.replaceState(null, '', url);
     void load(file);
-  }, [file, page, load]);
+  }, [file, page, c4view, load]);
 
   /** Another diagram starts on its first page. */
   const pickFile = useCallback((next: string) => {
     setPage(undefined);
+    setC4View(undefined);
     setFile(next);
-  }, []);
+  }, [setC4View]);
 
   // Live reload when the .puml (or the layout) changes on disk.
   useEffect(() => {
@@ -1318,7 +1329,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   return (
     // `data-loaded` names the file whose scene is on screen (`data-page` its draw.io page): the browser scripts wait on them (scripts/cdp.mjs open()).
-    <div className="app" data-loaded={doc?.file} data-page={doc?.pages?.[doc.page ?? 0]?.key}>
+    <div className="app" data-loaded={doc?.file} data-page={doc?.pages?.[doc.page ?? 0]?.key} data-view={doc?.view}>
       {dropping && (
         <div className="drop-overlay" role="presentation">
           <div className="drop-card">
@@ -1363,6 +1374,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             ))}
           </select>
         )}
+        <ViewSwitcher views={doc?.views} value={doc?.view} onChange={setC4View} />
         <span className="sep" aria-hidden="true" />
         <div className="keys joined" role="group" aria-label="Layout">
           <button disabled={blank || !!drawingNote} onClick={() => void runLayout('auto')} title={drawingNote ?? "Re-layout everything you haven't placed by hand"}>

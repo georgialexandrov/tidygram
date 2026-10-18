@@ -1,0 +1,38 @@
+@startuml zoom
+!include <C4/C4_Component>
+title Online shop, all three C4 levels in one file
+Person(customer, "Customer", "Buys things online")
+Person(picker, "Warehouse Picker", "Packs orders")
+System_Boundary(shop, "Online Shop") {
+  Container(web, "Web App", "React", "Catalogue and checkout")
+  Container_Boundary(api, "API") {
+    Component(orders, "Orders Controller", "NestJS", "Places and lists orders")
+    Component(payments, "Payment Service", "NestJS", "Charges cards")
+    Component(repo, "Order Repository", "TypeORM", "Reads and writes orders")
+  }
+  ContainerDb(db, "Database", "PostgreSQL", "Orders and customers")
+  ContainerQueue(bus, "Event Bus", "Kafka", "Order events")
+  Container(worker, "Fulfilment Worker", "Go", "Turns orders into picks")
+}
+System_Boundary(warehouse, "Warehouse System") {
+  Container(wms, "Warehouse API", "Java", "Stock and pick lists")
+  Container(scanner, "Scanner App", "Kotlin", "Handheld picking")
+}
+System_Ext(stripe, "Stripe", "Card payments")
+System_Ext(mail, "Mail Provider", "Transactional email")
+Rel(customer, web, "Uses", "HTTPS")
+Rel(web, api, "Calls", "JSON/HTTPS")
+Rel(web, orders, "Places orders", "JSON/HTTPS")
+Rel(orders, payments, "Charges")
+Rel(orders, repo, "Saves")
+Rel(repo, db, "Reads/writes", "SQL")
+Rel(payments, stripe, "Charges", "HTTPS")
+Rel(orders, bus, "Publishes")
+Rel(bus, worker, "Delivers")
+Rel(worker, wms, "Creates picks", "REST")
+Rel(worker, mail, "Sends", "SMTP")
+Rel(payments, mail, "Sends receipts", "SMTP")
+Rel(picker, scanner, "Picks with")
+Rel(scanner, wms, "Reads lists")
+Rel(wms, bus, "Reports shipped")
+@enduml

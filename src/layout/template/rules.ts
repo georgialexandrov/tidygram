@@ -1,5 +1,5 @@
 import type { ArrowHead, DEdge, Diagram } from '../../model/types.ts';
-import type { TemplateRules, TemplateSettings } from '../layout-file.ts';
+import { bandsKind, type TemplateRules, type TemplateSettings } from '../layout-file.ts';
 import { layersOf, resolveAssignments, rulesOf } from './defs.ts';
 
 /**
@@ -65,7 +65,7 @@ export function findViolations(diagram: Diagram, template: TemplateSettings, ass
     const lb = assigned.get(b);
     if (!la || !lb || la === lb) continue;
     let message: string | undefined;
-    if (template.kind === 'layered') {
+    if (bandsKind(template.kind)) {
       const ia = index.get(la)!;
       const ib = index.get(lb)!;
       const inverted = e.kind === 'realization' && rules !== 'strict';

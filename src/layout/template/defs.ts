@@ -7,7 +7,7 @@ import type { LayerDef, TemplateKind, TemplateRules, TemplateSettings } from '..
  * the picture shows and can be renamed in layout.json.
  */
 
-export const TEMPLATE_LABEL: Record<TemplateKind, string> = { layered: 'Layered', hexagonal: 'Hexagonal', clean: 'Clean' };
+export const TEMPLATE_LABEL: Record<TemplateKind, string> = { layered: 'Layered', hexagonal: 'Hexagonal', clean: 'Clean', tiers: 'C4 tiers' };
 
 const LAYERED: LayerDef[] = [
   { id: 'presentation', label: 'Presentation' },
@@ -41,12 +41,23 @@ const CLEAN: LayerDef[] = [
   { id: 'frameworks', label: 'Frameworks & drivers' },
 ];
 
+/** C4 tiers, top to bottom. The middle band takes the system's name when the diagram has exactly one system boundary. */
+const TIERS: LayerDef[] = [
+  { id: 'people', label: 'People' },
+  { id: 'system', label: 'Software system' },
+  { id: 'external', label: 'External systems' },
+];
+
 export const HEX_ROLES = ['driving', 'inbound', 'application', 'domain', 'outbound', 'driven'] as const;
 export type HexRole = (typeof HEX_ROLES)[number];
 
 export function defaultLayers(kind: TemplateKind, diagram?: Diagram): LayerDef[] {
   if (kind === 'hexagonal') return HEXAGONAL;
   if (kind === 'clean') return CLEAN;
+  if (kind === 'tiers') {
+    const systems = diagram?.containers.filter((c) => c.c4Boundary === 'system') ?? [];
+    return systems.length === 1 ? TIERS.map((l) => (l.id === 'system' ? { ...l, label: systems[0]!.label } : l)) : TIERS;
+  }
   return diagram?.family === 'archimate' ? ARCHIMATE : LAYERED;
 }
 
@@ -59,14 +70,15 @@ export function layersOf(template: Pick<TemplateSettings, 'kind' | 'layers'>, di
   return base.map((l) => ({ id: l.id, label: labels.get(l.id) ?? l.label }));
 }
 
-export function rulesOf(template: Pick<TemplateSettings, 'rules'>, diagram?: Diagram): TemplateRules {
+export function rulesOf(template: Pick<TemplateSettings, 'rules'> & { kind?: TemplateKind }, diagram?: Diagram): TemplateRules {
   // ArchiMate's serving and realization lines point up the layers by design.
-  return template.rules ?? (diagram?.family === 'archimate' ? 'off' : 'relaxed');
+  // Tiers: systems notify people and externals call back (webhooks) by design, so nothing is flagged unless asked.
+  return template.rules ?? (diagram?.family === 'archimate' || template.kind === 'tiers' ? 'off' : 'relaxed');
 }
 
 /** Where an element no signal places goes (and is listed as unassigned). */
 export function defaultLayer(kind: TemplateKind, layers: LayerDef[]): string {
-  const prefer = kind === 'clean' ? 'usecases' : 'application';
+  const prefer = kind === 'clean' ? 'usecases' : kind === 'tiers' ? 'system' : 'application';
   return layers.find((l) => l.id === prefer)?.id ?? layers[Math.floor((layers.length - 1) / 2)]!.id;
 }
 

@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ensureLayout, type LayoutMode } from './layout/auto.ts';
-import { emptyLayout, pageLayout, parseLayout, serializeLayout, TEMPLATE_KINDS, withPageLayout, type TemplateKind } from './layout/layout-file.ts';
+import { emptyLayout, parseLayout, serializeLayout, sliceLayout, TEMPLATE_KINDS, withSliceLayout, type TemplateKind } from './layout/layout-file.ts';
 import { applyTemplate, removeTemplate, unassigned } from './layout/template/index.ts';
 import type { TemplateScene } from './scene/template.ts';
 import { parseDiagram } from './model/diagram.ts';
@@ -37,6 +37,9 @@ back unless --no-write is given.
                Prints the guessed layers, unassigned elements and dependency violations
   --page P     multi-page draw.io: the page to render, by id, name or number (1 = first);
                each page keeps its own layout in the sidecar
+  --view V     C4 zoom level: context (people and systems), container:<system id>,
+               component:<container id> (ids of System_Boundary / Container_Boundary);
+               each view keeps its own layout in the sidecar (under "views")
   --to X       convert instead of rendering: writes the diagram in another format, with its
                layout (draw.io: in the file; PlantUML/Mermaid: in a sidecar next to it).
                Default output: diagram-<format>.<ext> next to the input, so the two never
@@ -53,6 +56,7 @@ const { values, positionals } = parseArgs({
     scale: { type: 'string' },
     template: { type: 'string' },
     page: { type: 'string' },
+    view: { type: 'string' },
     'no-write': { type: 'boolean', default: false },
     to: { type: 'string' },
     force: { type: 'boolean', default: false },
@@ -68,8 +72,10 @@ if (values.help || !file) {
 
 // `--page 2` is the second page; anything that isn't a plain number is a page id or name.
 const pageArg = values.page === undefined ? undefined : /^\d+$/.test(values.page) ? Number(values.page) - 1 : values.page;
-const { diagram, warnings, pages, page } = parseDiagram(readFileSync(file, 'utf8'), file, { page: pageArg });
+const { diagram, warnings, pages, page, views, view } = parseDiagram(readFileSync(file, 'utf8'), file, { page: pageArg, view: values.view });
 for (const w of warnings) console.warn(`${file}:${w.line}: ${w.message}: ${w.text.trim()}`);
+if (values.view && view !== values.view) process.exit(1);
+if (views) console.log(`view ${view ?? 'as written'} (views: ${views.map((v) => v.key).join(', ')})`);
 /** The first page's layout is the sidecar's top level; other pages live under `pages` by key. */
 const pageKey = pages && page ? pages[page]!.key : undefined;
 if (pages) console.log(`page ${page! + 1} of ${pages.length}: ${pages[page!]!.name}`);
@@ -81,7 +87,7 @@ const require = createRequire(import.meta.url);
 const avoid = await loadAvoid(join(dirname(require.resolve('libavoid-js')), 'libavoid.wasm'));
 
 const sidecar = before ? parseLayout(before) : emptyLayout();
-let layout = pageLayout(sidecar, pageKey);
+let layout = sliceLayout(sidecar, pageKey, view);
 if (values.theme) {
   if (!(values.theme in THEMES) && !(values.theme in THEME_ALIASES)) throw new Error(`Unknown theme ${values.theme}; use ${Object.keys(THEMES).join(' or ')}`);
   layout = { ...layout, view: { ...layout.view, theme: values.theme } };
@@ -116,13 +122,14 @@ if (layout.template && scene.kind === 'graph' && scene.template) reportTemplate(
 
 if (values.to) writeConverted(values.to, file);
 else {
-  const out = values.out ?? file.replace(DIAGRAM_FILE, '') + (pageKey ? `-${pageKey.replace(/[^\w.-]+/g, '_')}` : '') + '.svg';
+  const slice = pageKey ?? view;
+  const out = values.out ?? file.replace(DIAGRAM_FILE, '') + (slice ? `-${slice.replace(/[^\w.-]+/g, '_')}` : '') + '.svg';
   const fontCss = await embeddedFontCss(themeOf(layout.view).webFonts, diskCachedFetcher());
   writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame, fontCss })));
   console.log(`wrote ${out}`);
 }
 
-const after = serializeLayout(withPageLayout(sidecar, pageKey, layout));
+const after = serializeLayout(withSliceLayout(sidecar, pageKey, view, layout));
 if (!values['no-write'] && after !== before) {
   writeFileSync(layoutPath, after);
   console.log(`wrote ${layoutPath}`);

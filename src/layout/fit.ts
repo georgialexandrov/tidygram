@@ -12,7 +12,7 @@ import { containerPad } from '../scene/shapes.ts';
 import { largestScale } from './scale.ts';
 import { elkPositions, shapesFor } from './auto.ts';
 import { isTreeDiagram, treePositions } from './tree.ts';
-import { chosenEnds, type LayoutFile, type Point } from './layout-file.ts';
+import { bandsKind, chosenEnds, type LayoutFile, type Point } from './layout-file.ts';
 import { settleTemplate } from './template/index.ts';
 import { buildTemplateScene } from '../scene/template.ts';
 
@@ -175,7 +175,7 @@ function fitTemplate(diagram: Diagram, layout: LayoutFile, frame: Point): FitRes
   const ratio = frame[0] / frame[1];
   const base = themeFor(layout.view?.theme);
   const kind = layout.template!.kind;
-  const rows = kind === 'layered' ? [3, 4, 5, 6, 7, 8, 10] : [undefined];
+  const rows = bandsKind(kind) ? [3, 4, 5, 6, 7, 8, 10] : [undefined];
   let best: { score: number; layout: LayoutFile; scale: number; achieved: number; fill: number; name: string; spread: number; perRow: number | undefined } | undefined;
   let tried = 0;
   for (const scale of [1, 1.25, 1.5, 1.75, 2, 2.4, 2.8]) {
