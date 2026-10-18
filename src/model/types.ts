@@ -130,6 +130,12 @@ export interface DContainer {
    * their relative placement; otherwise it fits its contents like any other.
    */
   sourceBox?: SourceBox;
+  /**
+   * C4 boundaries: which macro opened it. `system` (System_Boundary) and
+   * `container` (Container_Boundary) are zoom levels: the C4 views
+   * (`src/model/c4-views.ts`) collapse them into one box.
+   */
+  c4Boundary?: 'system' | 'container' | 'enterprise' | 'boundary';
   line: number;
 }
 

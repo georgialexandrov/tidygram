@@ -28,9 +28,19 @@
  * template and the element → layer assignment live here, per page. While a
  * template is on, `nodes` hold the template's arrangement and `template.free`
  * keeps the free layout it replaced. Sidecars without `template` are free
- * layouts, exactly as before. A later "views" feature (C4 zoom levels as
- * switchable views) fits the same way `pages` does: a map of named entries,
- * each with its own `template`, `nodes` and `edges`.
+ * layouts, exactly as before.
+ *
+ * C4 zoom levels (`src/model/c4-views.ts`): the diagram as written is the
+ * top level; each view (`context`, `container:<id>`, `component:<id>`) has
+ * its own `template`, `nodes` and `edges` under `views`, keyed like the CLI's
+ * `--view`. A view without its own `view` settings uses the top level's
+ * (theme, frame, ...), and only stores them when they differ:
+ *
+ *     { "version": 1, "nodes": { ... }, "edges": { ... },
+ *       "views": { "context": { "nodes": { ... }, "edges": { ... } } } }
+ *
+ * `viewLayout` / `withViewLayout` read and write one view; `sliceLayout` /
+ * `withSliceLayout` take a page and a view at once.
  */
 
 export type Point = [number, number];
@@ -137,6 +147,8 @@ export interface LayoutFile {
   edges: Record<string, EdgeLayout>;
   /** Layouts of the other pages of a multi-page draw.io file, by page id. Absent otherwise. */
   pages?: Record<string, PageLayout>;
+  /** Layouts of C4 zoom levels (`context`, `container:<id>`, `component:<id>`), by view key. Absent otherwise. */
+  views?: Record<string, PageLayout>;
 }
 
 /** One non-first page's layout: a `LayoutFile` without the version or further pages. */
@@ -157,7 +169,7 @@ export function emptyLayout(): LayoutFile {
  */
 export function pageLayout(file: LayoutFile, page?: string): LayoutFile {
   if (page === undefined) {
-    const { pages: _pages, ...top } = file;
+    const { pages: _pages, views: _views, ...top } = file;
     return top;
   }
   const entry = file.pages?.[page];
@@ -166,13 +178,44 @@ export function pageLayout(file: LayoutFile, page?: string): LayoutFile {
 
 /** The whole sidecar with one page's layout replaced; an emptied page drops out of `pages`. */
 export function withPageLayout(file: LayoutFile, page: string | undefined, layout: LayoutFile): LayoutFile {
-  const { version: _version, pages: _pages, ...entry } = layout;
-  if (page === undefined) return file.pages ? { ...entry, version: 1, pages: file.pages } : { ...entry, version: 1 };
+  const { version: _version, pages: _pages, views: _views, ...entry } = layout;
+  if (page === undefined) return { ...entry, version: 1, ...(file.pages ? { pages: file.pages } : {}), ...(file.views ? { views: file.views } : {}) };
   const pages = { ...file.pages };
   if (entry.view || entry.template || Object.keys(entry.nodes).length || Object.keys(entry.edges).length) pages[page] = entry;
   else delete pages[page];
   const { pages: _old, ...top } = file;
   return Object.keys(pages).length ? { ...top, pages } : top;
+}
+
+/** One C4 view's layout (undefined: the diagram as written, the top level). Without its own `view` settings it takes the top level's. */
+export function viewLayout(file: LayoutFile, view?: string): LayoutFile {
+  if (view === undefined) return pageLayout(file);
+  const entry = file.views?.[view];
+  const settings = entry?.view ?? file.view;
+  const out: LayoutFile = { version: 1, ...(settings ? { view: settings } : {}), nodes: entry?.nodes ?? {}, edges: entry?.edges ?? {} };
+  if (entry?.template) out.template = entry.template;
+  return out;
+}
+
+/** The whole sidecar with one view's layout replaced; `view` settings equal to the top level's aren't repeated; an emptied view drops out. */
+export function withViewLayout(file: LayoutFile, view: string | undefined, layout: LayoutFile): LayoutFile {
+  if (view === undefined) return withPageLayout(file, undefined, layout);
+  const { version: _version, pages: _pages, views: _views, view: settings, ...rest } = layout;
+  const entry: PageLayout = { ...(settings && JSON.stringify(settings) !== JSON.stringify(file.view ?? {}) ? { view: settings } : {}), ...rest };
+  const views = { ...file.views };
+  if (entry.view || entry.template || Object.keys(entry.nodes).length || Object.keys(entry.edges).length) views[view] = entry;
+  else delete views[view];
+  const { views: _old, ...top } = file;
+  return Object.keys(views).length ? { ...top, views } : top;
+}
+
+/** A page of a draw.io file, or a view of a C4 file (views live at the top level; C4 files have one page). */
+export function sliceLayout(file: LayoutFile, page?: string, view?: string): LayoutFile {
+  return view === undefined ? pageLayout(file, page) : viewLayout(file, view);
+}
+
+export function withSliceLayout(file: LayoutFile, page: string | undefined, view: string | undefined, layout: LayoutFile): LayoutFile {
+  return view === undefined ? withPageLayout(file, page, layout) : withViewLayout(file, view, layout);
 }
 
 /**
@@ -202,16 +245,23 @@ export function parseLayout(text: string): LayoutFile {
   if (!text.trim()) return emptyLayout();
   const raw = JSON.parse(text) as Record<string, unknown>;
   const layout = readPage(raw);
-  if (raw.pages && typeof raw.pages === 'object') {
-    const pages: Record<string, PageLayout> = {};
-    for (const [key, value] of Object.entries(raw.pages as Record<string, unknown>)) {
-      if (!value || typeof value !== 'object') continue;
-      const { version: _version, ...page } = readPage(value as Record<string, unknown>);
-      pages[key] = page;
-    }
-    if (Object.keys(pages).length) layout.pages = pages;
-  }
+  const pages = readEntries(raw.pages);
+  if (pages) layout.pages = pages;
+  const views = readEntries(raw.views);
+  if (views) layout.views = views;
   return layout;
+}
+
+/** `pages` / `views`: a map of page-shaped entries; malformed ones are dropped. */
+function readEntries(raw: unknown): Record<string, PageLayout> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, PageLayout> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue;
+    const { version: _version, ...page } = readPage(value as Record<string, unknown>);
+    out[key] = page;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function readNodes(raw: unknown): Record<string, NodeLayout> {
@@ -321,9 +371,11 @@ const sortedKeys = (o: object) => Object.keys(o).sort((a, b) => a.localeCompare(
 
 /** One entry per line, sorted keys, integer coordinates: small, stable diffs. Other pages follow, indented one level. */
 export function serializeLayout(layout: LayoutFile): string {
-  const pages = layout.pages ? sortedKeys(layout.pages).map((key) => `    ${JSON.stringify(key)}: {\n${pageBody(layout.pages![key]!, '      ')}\n    }`) : [];
-  const tail = pages.length ? `,\n  "pages": {\n${pages.join(',\n')}\n  }` : '';
-  return `{\n  "version": 1,\n${pageBody(layout, '  ')}${tail}\n}\n`;
+  const entries = (name: string, map?: Record<string, PageLayout>) => {
+    const items = map ? sortedKeys(map).map((key) => `    ${JSON.stringify(key)}: {\n${pageBody(map[key]!, '      ')}\n    }`) : [];
+    return items.length ? `,\n  "${name}": {\n${items.join(',\n')}\n  }` : '';
+  };
+  return `{\n  "version": 1,\n${pageBody(layout, '  ')}${entries('pages', layout.pages)}${entries('views', layout.views)}\n}\n`;
 }
 
 const block = (lines: string[], pad: string) => (lines.length ? `{\n${lines.join(',\n')}\n${pad}}` : '{}');
