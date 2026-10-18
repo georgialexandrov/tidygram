@@ -3,3 +3,4 @@ out/
 *.svg
 !fixtures/**/*.svg
 .DS_Store
+dist/

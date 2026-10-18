@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:demo": "DEMO=1 vite build",
     "render": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
