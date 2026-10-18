@@ -23,7 +23,8 @@ import { pack } from './template/place.ts';
  *   boxes), with include/extend counted double so the included use case
  *   ends up next to its base;
  * - a note rides beside what it annotates (a note outside the target's
- *   package goes just outside the boundary, nearest the target).
+ *   package goes just outside the boundary where its line is shortest:
+ *   above, below, or in a lane opened beside it, the actors moving out).
  *
  * Several grid shapes are returned; the caller routes and scores them.
  */
@@ -68,6 +69,8 @@ interface Grid {
   /** Item ids in slot order (row-major). */
   order: string[];
   cols: number;
+  /** Column widths and row heights for the order they were computed for (the search asks again and again). */
+  shape?: GridShape;
 }
 
 /** A container's blocks: its own grid (`g:`) and child containers (`c:`), in grid order. */
@@ -325,6 +328,13 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     return at;
   };
 
+  const middleIds = middle.map((n) => n.id);
+  const middleShapes = middle.map((n) => shapes.get(n.id)!);
+  const pushTo = (m: Map<string, number[]>, key: string, v: number) => {
+    const list = m.get(key);
+    if (list) list.push(v);
+    else m.set(key, [v]);
+  };
   const unit = 150 * k;
   /** A corner in a line: a bend reads as a small detour. */
   const corner = unit * CORNER;
@@ -340,16 +350,29 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     const horizontal: { y: number; x0: number; x1: number; line: number }[] = [];
     const vertical: { x: number; y0: number; y1: number; line: number }[] = [];
     const fans = new Map<string, number[]>();
-    const boxes = middle.map((n) => ({ id: n.id, box: nodeBox(at[n.id]!, shapes.get(n.id)!) }));
-    const hits = (a: Pt, b: Pt, skip: string[]) => {
-      const [x0, x1, y0, y1] = [Math.min(a.x, b.x), Math.max(a.x, b.x), Math.min(a.y, b.y), Math.max(a.y, b.y)];
-      let n = 0;
-      for (const o of boxes) {
-        const bx = o.box;
-        if (bx.x > x1 || bx.x + bx.w < x0 || bx.y > y1 || bx.y + bx.h < y0) continue;
-        if (!skip.includes(o.id) && segmentHitsBox(a, b, bx)) n++;
+    // Element boxes sorted by left edge, so a segment only looks at those that start before it ends.
+    const boxes = middle.map((n, i) => ({ id: middleIds[i]!, box: nodeBox(at[n.id]!, middleShapes[i]!) })).sort((a, b) => a.box.x - b.box.x);
+    const n = boxes.length;
+    const bx0 = new Float64Array(n);
+    const bx1 = new Float64Array(n);
+    const by0 = new Float64Array(n);
+    const by1 = new Float64Array(n);
+    boxes.forEach((o, i) => {
+      [bx0[i], bx1[i], by0[i], by1[i]] = [o.box.x, o.box.x + o.box.w, o.box.y, o.box.y + o.box.h];
+    });
+    /** Elements the segment runs through, but `skip` and `skip2` (its own ends). */
+    const hits = (a: Pt, b: Pt, skip: string, skip2?: string) => {
+      const x0 = a.x < b.x ? a.x : b.x;
+      const x1 = a.x < b.x ? b.x : a.x;
+      const y0 = a.y < b.y ? a.y : b.y;
+      const y1 = a.y < b.y ? b.y : a.y;
+      let count = 0;
+      for (let i = 0; i < n && bx0[i]! <= x1; i++) {
+        if (bx1[i]! < x0 || by0[i]! > y1 || by1[i]! < y0) continue;
+        const o = boxes[i]!;
+        if (o.id !== skip && o.id !== skip2 && segmentHitsBox(a, b, o.box)) count++;
       }
-      return n;
+      return count;
     };
     links.forEach((l, line) => {
       const [p, q] = [at[l.a], at[l.b]];
@@ -358,7 +381,7 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
       const seg = (a: Pt, b: Pt) => {
         if (Math.abs(a.y - b.y) < 1) horizontal.push({ y: a.y, x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), line });
         else vertical.push({ x: a.x, y0: Math.min(a.y, b.y), y1: Math.max(a.y, b.y), line });
-        total += (Math.abs(a.x - b.x) + Math.abs(a.y - b.y)) * l.w + hits(a, b, [l.a, l.b]) * unit * 0.6;
+        total += (Math.abs(a.x - b.x) + Math.abs(a.y - b.y)) * l.w + hits(a, b, l.a, l.b) * unit * 0.6;
       };
       if (actor && other && !isActorId(other)) {
         const a = at[actor]!;
@@ -368,11 +391,11 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
         const us = shapes.get(other)!;
         const entry = u.x + ((left ? -1 : 1) * us.w) / 2;
         total += Math.abs(a.x - trunk);
-        if (!hits({ x: trunk, y: u.y }, { x: entry, y: u.y }, [other])) {
+        if (!hits({ x: trunk, y: u.y }, { x: entry, y: u.y }, other)) {
           // Nothing in the way: straight across at the use case's height.
           total += Math.abs(a.y - u.y) + (Math.abs(a.y - u.y) > 1 ? 2 * corner : 0);
           seg({ x: trunk, y: u.y }, { x: entry, y: u.y });
-          fans.set(actor, [...(fans.get(actor) ?? []), u.y]);
+          pushTo(fans, actor, u.y);
           return;
         }
         // Something sits in front of it in its row: the router runs along the gap above or below
@@ -384,13 +407,13 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
         seg({ x: u.x, y: gy }, { x: u.x, y: above ? u.y - us.h / 2 : u.y + us.h / 2 });
         // Three corners (out of the trunk, along the gap, down into it).
         total += 3 * corner;
-        fans.set(actor, [...(fans.get(actor) ?? []), gy]);
+        pushTo(fans, actor, gy);
         return;
       }
       const [sp, sq] = [shapes.get(l.a)!, shapes.get(l.b)!];
       // Stacked above one another with something in between: the router goes round on the actors' side
       // (seen in every routed picture), crossing their lines on the way.
-      if (Math.abs(p.x - q.x) < (sp.w + sq.w) / 2 && Math.abs(p.y - q.y) > 1 && hits(p, { x: p.x, y: q.y }, [l.a, l.b])) {
+      if (Math.abs(p.x - q.x) < (sp.w + sq.w) / 2 && Math.abs(p.y - q.y) > 1 && hits(p, { x: p.x, y: q.y }, l.a, l.b)) {
         const x = Math.min(p.x - sp.w / 2, q.x - sq.w / 2) - 12 * k;
         seg({ x: p.x - sp.w / 2, y: p.y }, { x, y: p.y });
         seg({ x, y: p.y }, { x, y: q.y });
@@ -402,18 +425,31 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
       // One corner, whichever way passes fewer elements.
       const c1 = { x: q.x, y: p.y };
       const c2 = { x: p.x, y: q.y };
-      const h1 = hits(p, c1, [l.a, l.b]) + hits(c1, q, [l.a, l.b]);
-      const h2 = hits(p, c2, [l.a, l.b]) + hits(c2, q, [l.a, l.b]);
+      const h1 = hits(p, c1, l.a, l.b) + hits(c1, q, l.a, l.b);
+      const h2 = hits(p, c2, l.a, l.b) + hits(c2, q, l.a, l.b);
       const c = h1 <= h2 ? c1 : c2;
       total += corner;
       seg(p, c);
       seg(c, q);
     });
+    // Crossings: vertical runs sorted by x, each horizontal run checks only those within its span.
+    vertical.sort((a, b) => a.x - b.x);
+    let crossings = 0;
     for (const h of horizontal) {
-      for (const v of vertical) {
-        if (v.line !== h.line && v.x > h.x0 + 1 && v.x < h.x1 - 1 && h.y > v.y0 + 1 && h.y < v.y1 - 1) total += unit * CROSS;
+      let lo = 0;
+      let hi = vertical.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (vertical[mid]!.x > h.x0 + 1) hi = mid;
+        else lo = mid + 1;
+      }
+      for (let i = lo; i < vertical.length; i++) {
+        const v = vertical[i]!;
+        if (v.x >= h.x1 - 1) break;
+        if (v.line !== h.line && h.y > v.y0 + 1 && h.y < v.y1 - 1) crossings++;
       }
     }
+    total += crossings * unit * CROSS;
     // Fans in one column. Each actor's lines leave it, run to a trunk beside the column and branch off
     // at their rows. With A's trunk nearer the column than B's, B's lines cross A's trunk if B sits inside
     // A's span, and A's branches cross B's trunk where A's rows fall inside B's span; the router takes the
@@ -438,15 +474,22 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
   /** Actors at the barycentre of what they connect to, families together, packed in each column. */
   const placeActors = (at: Positions, actorY: Map<string, number>, middleY: number, parentAt: Map<string, ParentAt>) => {
     const ysOf = new Map<string, number[]>();
-    for (const a of actors) ysOf.set(a.id, neighbours.get(a.id)!.filter((o) => !isActorId(o.id)).map((o) => at[o.id]?.y).filter((y) => y !== undefined));
+    for (const a of actors) {
+      const ys: number[] = [];
+      for (const o of actorLinks.get(a.id)!) {
+        const p = at[o];
+        if (p) ys.push(p.y);
+      }
+      ysOf.set(a.id, ys);
+    }
     const want = new Map([...ysOf].filter(([, ys]) => ys.length).map(([id, ys]) => [id, median(ys)]));
     for (const side of ['left', 'right'] as const) {
-      const column = actors.filter((a) => sides.get(a.id) === side);
+      const column = columns[side];
       if (!column.length) continue;
       // Families are packed as one rigid stack, so a generalisation stays a short line. A stack sits at the
       // median of its lines, not the mean: an actor with one far use case gets one long line, rather than
       // sitting halfway and crossing everyone's lines with all of them.
-      const families = familyOrder(diagram, column, want, actorY, parentAt);
+      const families = orderers[side](want, actorY, parentAt);
       const stacks = families.map((f) => {
         const offsets: number[] = [];
         let y = 0;
@@ -468,7 +511,8 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
         let best: number | undefined;
         st.f.forEach((id, j) => {
           for (const y of ysOf.get(id)!) {
-            const d = y - (ys[i]! + st.rel[j]!);
+            // Level with the figure, not the node's centre (an actor's figure sits above its name).
+            const d = y - (ys[i]! + st.rel[j]! + (shapes.get(id)!.anchor.dy ?? 0));
             if (Math.abs(d) < gap.level && ys[i]! + d >= lo && ys[i]! + d <= hi && (best === undefined || Math.abs(d) < Math.abs(best))) best = d;
           }
         });
@@ -479,6 +523,10 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
   };
   const actorIds = new Set(actors.map((a) => a.id));
   const isActorId = (id: string) => actorIds.has(id);
+  /** Each actor's non-actor neighbours, one entry per line. */
+  const actorLinks = new Map(actors.map((a) => [a.id, neighbours.get(a.id)!.filter((o) => !isActorId(o.id)).map((o) => o.id)]));
+  const columns = { left: actors.filter((a) => sides.get(a.id) === 'left'), right: actors.filter((a) => sides.get(a.id) === 'right') };
+  const orderers = { left: familyOrder(diagram, columns.left), right: familyOrder(diagram, columns.right) };
 
   /** Rows by where the neighbours are (top to bottom), each row's slots by left/right pull. */
   const barycentreOrder = (s: State, g: Grid) => {
@@ -495,8 +543,23 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     g.order = order;
   };
 
+  /**
+   * Cost of a state, remembered by its arrangement: the search revisits the same arrangement often (a
+   * move of a free slot among free slots, a swap undone, the parents tried in place).
+   */
+  const seenCost = new Map<string, number>();
+  const evaluate = (s: State): number => {
+    let key = '';
+    for (const b of s.blocks.values()) key += b.order.join(',') + '|';
+    for (const g of s.grids.values()) for (const id of g.order) key += (id.startsWith('~') ? '~' : id) + ',';
+    for (const [p, v] of s.parentAt) key += `|${p}=${v}`;
+    let c = seenCost.get(key);
+    if (c === undefined) seenCost.set(key, (c = cost(positions(s))));
+    return c;
+  };
+
   const improve = (s: State, list: string[], apply: (l: string[]) => void) => {
-    let best = cost(positions(s));
+    let best = evaluate(s);
     // Generalisation parents (actors with specialised actors): between their children, above or below them.
   const parents = [...new Set(diagram.edges.filter((e) => e.kind === 'generalization' && actorIds.has(e.from) && actorIds.has(e.to)).map((e) => e.to))];
   const placeParents = () => {
@@ -505,7 +568,7 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
       let keep: ParentAt = 'middle';
       for (const at of ['middle', 'first', 'last'] as const) {
         state.parentAt.set(p, at);
-        const c = cost(positions(state));
+        const c = evaluate(state);
         if (c < best - 1e-6) [best, keep] = [c, at];
       }
       state.parentAt.set(p, keep);
@@ -518,7 +581,7 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
         for (let j = i + 1; j < list.length; j++) {
           [list[i], list[j]] = [list[j]!, list[i]!];
           apply(list);
-          const c = cost(positions(s));
+          const c = evaluate(s);
           if (c < best - 1e-6) {
             best = c;
             better = true;
@@ -536,7 +599,7 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
           const [x] = list.splice(i, 1);
           list.splice(j, 0, x!);
           apply(list);
-          const c = cost(positions(s));
+          const c = evaluate(s);
           if (c < best - 1e-6) {
             best = c;
             better = true;
@@ -567,7 +630,7 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     for (const order of permutations(b.order)) {
       b.order = order;
       for (let r = 0; r < 2; r++) for (const g of state.grids.values()) barycentreOrder(state, g);
-      const c = cost(positions(state));
+      const c = evaluate(state);
       if (c < best || !keep) [best, keep] = [c, { order, grids: new Map([...state.grids].map(([key, g]) => [key, [...g.order]])) }];
     }
     b.order = keep!.order;
@@ -586,7 +649,10 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
   const at = positions(state);
 
   // Notes for an element in another container (a top-level note on a packaged use case): just outside the
-  // outermost container that holds the target but not the note, straight above or below the target.
+  // outermost container that holds the target but not the note, wherever its line is shortest: straight
+  // above or below the target, or beside the container at the target's height, in a lane opened between
+  // the container and that side's actor column (the actors move out to make room).
+  const lanes = { left: 0, right: 0 };
   for (const [noteId, r] of rides) {
     if (at[noteId] || !at[r.target]) continue;
     const note = byId.get(noteId)!;
@@ -595,19 +661,55 @@ export function useCasePositions(diagram: Diagram, shapes: Map<string, NodeShape
     const outer = ancestors(diagram, byId.get(r.target)!.parent).filter((c) => !own.has(c)).at(-1);
     const all = Object.entries(at).map(([id, p]) => nodeBox(p, shapes.get(id)!));
     const t = at[r.target]!;
-    let seed = { x: t.x, y: t.y };
-    if (outer) {
-      const box = boundsOf(diagram, outer, at, shapes, pad);
-      const up = t.y - box.y < box.y + box.h - t.y;
-      seed = { x: t.x, y: up ? box.y - gap.rider - ns.h / 2 : box.y + box.h + gap.rider + ns.h / 2 };
-      all.push(box);
+    if (!outer) {
+      at[noteId] = nudgeFree(t, ns, all, 1);
+      continue;
     }
-    at[noteId] = nudgeFree(seed, ns, all, up(seed, t));
+    const ts = shapes.get(r.target)!;
+    const box = boundsOf(diagram, outer, at, shapes, pad);
+    all.push(box);
+    // Elements and other containers in the way of the straight connector: the router goes round each.
+    const targetIn = new Set(ancestors(diagram, byId.get(r.target)!.parent));
+    const obstacles = [
+      ...Object.entries(at)
+        .filter(([id]) => id !== r.target && id !== noteId)
+        .map(([id, p]) => nodeBox(p, shapes.get(id)!)),
+      ...diagram.containers.filter((c) => !targetIn.has(c.id)).map((c) => boundsOf(diagram, c.id, at, shapes, pad)),
+    ].filter((b) => b.w > 0);
+    const detour = (a: Pt, b: Pt) => obstacles.filter((o) => segmentHitsBox(a, b, o)).length * unit;
+    const options: { p: Pt; line: number; side?: 'left' | 'right' }[] = [];
+    for (const dir of [-1, 1]) {
+      const p = nudgeFree({ x: t.x, y: dir < 0 ? box.y - gap.rider - ns.h / 2 : box.y + box.h + gap.rider + ns.h / 2 }, ns, all, dir);
+      const line = Math.abs(p.y - t.y) - (ns.h + ts.h) / 2 + Math.max(0, Math.abs(p.x - t.x) - (ns.w + ts.w) / 2);
+      options.push({ p, line: line + detour({ x: t.x, y: t.y + (dir * ts.h) / 2 }, { x: t.x, y: p.y - (dir * ns.h) / 2 }) });
+    }
+    for (const side of ['left', 'right'] as const) {
+      const dir = side === 'left' ? -1 : 1;
+      const x = side === 'left' ? box.x - gap.rider - ns.w / 2 : box.x + box.w + gap.rider + ns.w / 2;
+      // Lines from that side's actors run across the lane at their use cases' heights: keep off them.
+      const across = links
+        .filter((l) => (isActorId(l.a) && sides.get(l.a) === side) !== (isActorId(l.b) && sides.get(l.b) === side))
+        .map((l) => at[isActorId(l.a) && sides.get(l.a) === side ? l.b : l.a]?.y)
+        .filter((y) => y !== undefined)
+        .map((y) => ({ x: x - ns.w / 2, y: y - 4, w: ns.w, h: 8 }));
+      const p = nudgeAlong({ x, y: t.y }, ns, [...all, ...across]);
+      if (!p) continue;
+      // The lane widens the picture: count that against it.
+      const widen = Math.max(0, ns.w + 2 * gap.rider - lanes[side]);
+      const line = dir * (p.x - t.x) - (ns.w + ts.w) / 2 + Math.abs(p.y - t.y) + widen / 2;
+      options.push({ p, side, line: line + detour({ x: t.x + (dir * ts.w) / 2, y: t.y }, { x: p.x - (dir * ns.w) / 2, y: t.y }) });
+    }
+    const best = options.reduce((a, b) => (b.line < a.line ? b : a));
+    at[noteId] = best.p;
+    if (best.side) {
+      const need = ns.w + 2 * gap.rider;
+      const shift = Math.max(0, need - lanes[best.side]);
+      lanes[best.side] += shift;
+      for (const a of actors) if (sides.get(a.id) === best.side) at[a.id] = { x: at[a.id]!.x + (best.side === 'left' ? -shift : shift), y: at[a.id]!.y };
+    }
   }
   return at;
 }
-
-const up = (seed: { y: number }, t: { y: number }) => (seed.y < t.y ? -1 : 1);
 
 /** First spot from `seed` outwards (away from the target) where the note fits; then sideways. */
 function nudgeFree(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[], dir: number): { x: number; y: number } {
@@ -619,6 +721,18 @@ function nudgeFree(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[
     }
   }
   return seed;
+}
+
+/** Nearest spot to `seed` straight up or down where the note fits, if one is within reach. */
+function nudgeAlong(seed: { x: number; y: number }, shape: NodeShape, boxes: Box[]): { x: number; y: number } | undefined {
+  const fits = (p: { x: number; y: number }) => !boxes.some((b) => overlaps(nodeBox(p, shape), b, 12));
+  for (let i = 0; i < 40; i++) {
+    for (const dir of i ? [-1, 1] : [1]) {
+      const p = { x: seed.x, y: seed.y + dir * i * 12 };
+      if (fits(p)) return p;
+    }
+  }
+  return undefined;
 }
 
 function ancestors(diagram: Diagram, parent: string | undefined): string[] {
@@ -653,8 +767,9 @@ const isInclude = (e: DEdge) => e.kind === 'dependency' || /include|extend/i.tes
 /**
  * Column order: generalisation families stay together (ordered by where their lines pull them), the parent
  * in the middle of its children so each triangle is a short vertical line. Keeps the previous order on ties.
+ * The families are worked out once per column; the returned function orders them for a placement.
  */
-function familyOrder(diagram: Diagram, column: DNode[], want: Map<string, number>, prev: Map<string, number>, parentAt: Map<string, ParentAt>): string[][] {
+function familyOrder(diagram: Diagram, column: DNode[]): (want: Map<string, number>, prev: Map<string, number>, parentAt: Map<string, ParentAt>) => string[][] {
   const ids = new Set(column.map((a) => a.id));
   const parentOf = new Map<string, string>();
   for (const e of diagram.edges) if (e.kind === 'generalization' && ids.has(e.from) && ids.has(e.to) && !parentOf.has(e.from)) parentOf.set(e.from, e.to);
@@ -662,22 +777,31 @@ function familyOrder(diagram: Diagram, column: DNode[], want: Map<string, number
     const p = parentOf.get(id);
     return p && !seen.has(p) ? top(p, seen.add(id)) : id;
   };
-  const key = (id: string) => want.get(id) ?? prev.get(id) ?? 0;
-  const arrange = (id: string): string[] => {
-    const kids = column.filter((a) => parentOf.get(a.id) === id && a.id !== id).map((a) => a.id);
-    const sub = kids.map((c) => ({ list: arrange(c), at: mean(arrange(c).map(key)) })).sort((a, b) => a.at - b.at);
-    const at = parentAt.get(id) ?? 'middle';
-    const mid = at === 'first' ? 0 : at === 'last' ? sub.length : Math.floor(sub.length / 2);
-    return [...sub.slice(0, mid).flatMap((s) => s.list), id, ...sub.slice(mid).flatMap((s) => s.list)];
+  const kidsOf = new Map(column.map((p) => [p.id, column.filter((a) => parentOf.get(a.id) === p.id && a.id !== p.id).map((a) => a.id)]));
+  const rootIds = column.filter((a) => top(a.id) === a.id).map((a) => a.id);
+  return (want, prev, parentAt) => {
+    const key = (id: string) => want.get(id) ?? prev.get(id) ?? 0;
+    const arrange = (id: string): string[] => {
+      const sub = kidsOf
+        .get(id)!
+        .map((c) => {
+          const list = arrange(c);
+          return { list, at: mean(list.map(key)) };
+        })
+        .sort((a, b) => a.at - b.at);
+      const at = parentAt.get(id) ?? 'middle';
+      const mid = at === 'first' ? 0 : at === 'last' ? sub.length : Math.floor(sub.length / 2);
+      return [...sub.slice(0, mid).flatMap((s) => s.list), id, ...sub.slice(mid).flatMap((s) => s.list)];
+    };
+    const roots = rootIds.map((id) => ({ list: arrange(id) }));
+    // Anything a cycle left out.
+    const placed = new Set(roots.flatMap((r) => r.list));
+    for (const a of column) if (!placed.has(a.id)) roots.push({ list: [a.id] });
+    return roots
+      .map((r) => ({ ...r, at: mean(r.list.map(key)) }))
+      .sort((a, b) => a.at - b.at)
+      .map((r) => r.list);
   };
-  const roots = column.filter((a) => top(a.id) === a.id).map((a) => ({ list: arrange(a.id) }));
-  // Anything a cycle left out.
-  const placed = new Set(roots.flatMap((r) => r.list));
-  for (const a of column) if (!placed.has(a.id)) roots.push({ list: [a.id] });
-  return roots
-    .map((r) => ({ ...r, at: mean(r.list.map(key)) }))
-    .sort((a, b) => a.at - b.at)
-    .map((r) => r.list);
 }
 
 function median(xs: number[]): number {
@@ -730,39 +854,75 @@ function measureBlock(key: string, s: State, blocksOf: Map<string, string[]>, pa
   return { w: total(colW, gap.block), h: total(rowH, gap.block) };
 }
 
-function gridShape(g: Grid) {
+interface GridShape {
+  /** The order and column count this was computed for. */
+  order: string[];
+  cols: number;
+  colW: number[];
+  rowH: number[];
+  /** Size with the given gaps, once asked. */
+  size?: { w: number; h: number };
+  /**
+   * Each placed element (and riding note) as offsets from the grid's origin: cell start, centring in the
+   * cell, centre in the footprint (and a note's offset from its element), added in that order.
+   */
+  place?: { id: string; x: number[]; y: number[] }[];
+}
+
+const sameOrder = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+
+function gridShape(g: Grid): GridShape {
+  if (g.shape && g.shape.cols === g.cols && sameOrder(g.shape.order, g.order)) return g.shape;
+  // Empty columns/rows (all slots free) take no room.
   const colW: number[] = [];
   const rowH: number[] = [];
-  g.order.forEach((id, i) => {
-    const it = g.items.get(id);
-    if (!it) return;
-    const [r, c] = [Math.floor(i / g.cols), i % g.cols];
-    colW[c] = Math.max(colW[c] ?? 0, it.w);
-    rowH[r] = Math.max(rowH[r] ?? 0, it.h);
-  });
-  // Empty columns/rows (all slots free) take no room.
-  return { colW: Array.from(colW, (w) => w ?? 0), rowH: Array.from(rowH, (h) => h ?? 0) };
+  for (let i = 0; i < g.order.length; i++) {
+    const it = g.items.get(g.order[i]!);
+    if (!it) continue;
+    const r = Math.floor(i / g.cols);
+    const c = i % g.cols;
+    while (colW.length <= c) colW.push(0);
+    while (rowH.length <= r) rowH.push(0);
+    if (it.w > colW[c]!) colW[c] = it.w;
+    if (it.h > rowH[r]!) rowH[r] = it.h;
+  }
+  g.shape = { order: [...g.order], cols: g.cols, colW, rowH };
+  return g.shape;
 }
 
 function gridSize(g: Grid, gap: Gaps) {
-  const { colW, rowH } = gridShape(g);
-  return { w: total(colW.filter((w) => w > 0), gap.col), h: total(rowH.filter((h) => h > 0), gap.row) };
+  const shape = gridShape(g);
+  const { colW, rowH } = shape;
+  return (shape.size ??= { w: total(colW.filter((w) => w > 0), gap.col), h: total(rowH.filter((h) => h > 0), gap.row) });
 }
 
 function placeGrid(g: Grid, gap: Gaps, at: Positions, ox: number, oy: number) {
-  const { colW, rowH } = gridShape(g);
-  const xs = offsets(colW, gap.col);
-  const ys = offsets(rowH, gap.row);
-  g.order.forEach((id, i) => {
-    const it = g.items.get(id);
-    if (!it) return;
-    const [r, c] = [Math.floor(i / g.cols), i % g.cols];
-    // Centred in its cell.
-    const x = ox + xs[c]! + (colW[c]! - it.w) / 2 + it.cx;
-    const y = oy + ys[r]! + (rowH[r]! - it.h) / 2 + it.cy;
-    at[id] = { x, y };
-    for (const rd of it.riders) at[rd.id] = { x: x + rd.dx, y: y + rd.dy };
-  });
+  const shape = gridShape(g);
+  if (!shape.place) {
+    const { colW, rowH } = shape;
+    const xs = offsets(colW, gap.col);
+    const ys = offsets(rowH, gap.row);
+    shape.place = [];
+    g.order.forEach((id, i) => {
+      const it = g.items.get(id);
+      if (!it) return;
+      const [r, c] = [Math.floor(i / g.cols), i % g.cols];
+      // Centred in its cell.
+      const x = [xs[c]!, (colW[c]! - it.w) / 2, it.cx];
+      const y = [ys[r]!, (rowH[r]! - it.h) / 2, it.cy];
+      shape.place!.push({ id, x, y });
+      for (const rd of it.riders) shape.place!.push({ id: rd.id, x: [...x, rd.dx], y: [...y, rd.dy] });
+    });
+  }
+  for (const p of shape.place) {
+    const x = ox + p.x[0]! + p.x[1]! + p.x[2]!;
+    const y = oy + p.y[0]! + p.y[1]! + p.y[2]!;
+    at[p.id] = p.x.length > 3 ? { x: x + p.x[3]!, y: y + p.y[3]! } : { x, y };
+  }
 }
 
 /** Start of each cell along an axis; zero-size cells (empty) take no gap. */

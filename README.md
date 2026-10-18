@@ -563,7 +563,11 @@ Per type:
   package order tried exhaustively (≤ 5), use cases ordered by barycentre
   against the actor columns, then improved by swaps and moves scored on
   estimated routes (length, include/extend double, crossings, runs through
-  boxes, actor fans that interleave); notes beside what they annotate. Six
+  boxes, actor fans that interleave); actors level with a use case meet
+  it at the figure's middle (not the middle of figure and name); notes
+  beside what they annotate, and a note outside its target's boundary
+  just outside it where its line is shortest (above, below, or in a lane
+  opened beside the boundary, the actors moving out). Six
   grid shapes nearest 16:10 are optimised and routed with the ELK
   candidates; a stored layout always wins (it's only Auto/first layout).
 - State diagrams: fork/join bars lie across the flow (upright when their
