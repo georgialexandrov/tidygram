@@ -186,6 +186,8 @@ type Drag =
       template?: TemplateScene;
       /** Primary element's anchor offset from its centre (a port's lollipop is what lands on the outline). */
       anchor: Point;
+      /** The layout as of the last move: React may not have re-rendered it into `layoutRef` by pointer-up. */
+      latest?: LayoutFile;
     }
   | { kind: 'edge'; id: string; start: Point; before: LayoutFile }
   | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean }
@@ -693,7 +695,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           setGuides([]);
         }
         dirty.current = { nodes: d.dirtyNodes, edges: new Set() };
-        setLayout(moveNodes(d.before, doc.diagram, d.origin, d.originVia, Math.round(dx), Math.round(dy)));
+        d.latest = moveNodes(d.before, doc.diagram, d.origin, d.originVia, Math.round(dx), Math.round(dy));
+        setLayout(d.latest);
         if (d.template && primary) {
           const at: Point = [primary.x + dx + d.anchor[0], primary.y + dy + d.anchor[1]];
           const region = regionAt(d.template, at, 12 / k + 8);
@@ -767,7 +770,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
     switch (d.kind) {
       case 'nodes': {
         if (!d.moved) break;
-        const pinned = setPinned(layoutRef.current, d.ids, true);
+        const pinned = setPinned(d.latest ?? layoutRef.current, d.ids, true);
         // Dropped into another band, ring or zone: reassigned there (one undo step with the move).
         const moved = doc && d.template ? dropIntoTemplate(doc.diagram, pinned, d.template, d.ids, d.primary) : undefined;
         commit(moved ?? pinned, d.before);

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const URL_ = `http://localhost:${process.env.PUML_PORT ?? 5199}/?file=fixtures/food-delivery.puml`;
 const LAYOUT = new URL('../fixtures/food-delivery.layout.json', import.meta.url);
-const PORT = 9333;
+const PORT = Number(process.env.CDP_PORT ?? 9333);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const original = readFileSync(LAYOUT, 'utf8');
 const ARCH = new URL('../fixtures/architecture/layered-web-shop.layout.json', import.meta.url);
@@ -76,6 +76,25 @@ try {
   const rectOf = (selector) => evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return [r.x, r.y, r.right, r.bottom]; })()`);
   const centreOf = (selector) =>
     evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r && [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+
+  // The file on disk is what the drag produced once the commit's rebuild and the debounced save (250 ms) have landed:
+  // poll it until `done` holds and it has stopped changing; a 5 s timeout leaves the assertion to judge.
+  const settleLayout = async (done) => {
+    const t0 = Date.now();
+    let last;
+    let quiet = 0;
+    while (Date.now() - t0 < 5000) {
+      await sleep(60);
+      const now = readFileSync(LAYOUT, 'utf8');
+      if (now === last && done(JSON.parse(now))) {
+        if (++quiet >= 5) break;
+      } else {
+        quiet = 0;
+        last = now;
+      }
+    }
+    return JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  };
 
   await send('Runtime.enable');
   await send('Page.enable');
@@ -155,16 +174,16 @@ try {
   for (let i = 1; i <= 6; i++) await mouse('mouseMoved', h1[0] + ((goal[0] - h1[0]) * i) / 6, h1[1] + ((goal[1] - h1[1]) * i) / 6, 1, 0);
   await mouse('mouseReleased', goal[0], goal[1], 0, 0);
   await sleep(500);
+  // Back to the fitted view before the reset: at the zoomed view the goal can fall below the viewport.
+  await wheel(220);
+  await sleep(300);
   const h2 = await centreOf(handle);
-  if (process.env.SMOKE_DEBUG) console.log('end phase', { h0, goal, h1, h2, afterEnd: afterEnd.edges[ID], undo: afterEndUndo.edges[ID] });
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: h2[0], y: h2[1], button: 'left', buttons: 1, clickCount: 1 });
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: h2[0], y: h2[1], button: 'left', buttons: 0, clickCount: 1 });
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: h2[0], y: h2[1], button: 'left', buttons: 1, clickCount: 2 });
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: h2[0], y: h2[1], button: 'left', buttons: 0, clickCount: 2 });
   await sleep(600);
   const afterReset = JSON.parse(readFileSync(LAYOUT, 'utf8'));
-  await wheel(220);
-  await sleep(300);
   const endResults = {
     handleShown,
     hintOnHover,
@@ -185,11 +204,9 @@ try {
   const groupSel = await selected();
   const adminNow = await centreOf('[data-id="Admin"] circle');
   await drag(adminNow, [adminNow[0] + 80, adminNow[1] + 40]);
-  await sleep(600);
-  const groupAfter = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  const groupAfter = await settleLayout((l) => Math.abs(l.nodes.Admin.x - groupBefore.nodes.Admin.x - 80 / k) < 2 && Math.abs(l.nodes.Courier.y - groupBefore.nodes.Courier.y - 40 / k) < 2);
   await undoKey();
-  await sleep(600);
-  const groupUndone = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  const groupUndone = await settleLayout((l) => JSON.stringify(l.nodes.Admin) === JSON.stringify(groupBefore.nodes.Admin));
   const moved = (id, from, to) => [Math.round(to.nodes[id].x - from.nodes[id].x), Math.round(to.nodes[id].y - from.nodes[id].y), !!to.nodes[id].pinned];
 
   // 3c. Marquee: drag on empty canvas around two actors; exactly those (and what else lies fully inside) get selected.
