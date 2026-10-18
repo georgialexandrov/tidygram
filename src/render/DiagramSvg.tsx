@@ -621,11 +621,13 @@ export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }
 }
 
 /** Standalone, non-interactive SVG for export. With a frame, the canvas has exactly that aspect ratio. */
-export function DiagramSvg({ scene, frame, margin = 24 }: { scene: AnyScene; frame?: Point; margin?: number }) {
+/** `fontCss` is `@font-face` rules (see `embeddedFontCss`) so the file looks the same without the fonts installed. */
+export function DiagramSvg({ scene, frame, margin = 24, fontCss }: { scene: AnyScene; frame?: Point; margin?: number; fontCss?: string }) {
   const b = scene.bounds;
   const box: Box = frame ? frameRect(b, frame, margin) : { x: b.x - margin, y: b.y - margin, w: b.w + margin * 2, h: b.h + margin * 2 };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox={`${f(box.x)} ${f(box.y)} ${f(box.w)} ${f(box.h)}`} width={Math.ceil(box.w)} height={Math.ceil(box.h)}>
+      {fontCss && <style>{fontCss}</style>}
       <rect x={f(box.x)} y={f(box.y)} width={f(box.w)} height={f(box.h)} fill={scene.theme.colors.background} />
       <AnyContent scene={scene} />
     </svg>

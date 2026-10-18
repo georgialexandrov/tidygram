@@ -11,7 +11,9 @@ import type { TemplateScene } from './scene/template.ts';
 import { parseDiagram } from './model/diagram.ts';
 import { DiagramSvg } from './render/DiagramSvg.tsx';
 import { loadAvoid } from './scene/avoid.ts';
-import { THEME_ALIASES, THEMES } from './scene/theme.ts';
+import { THEME_ALIASES, THEMES, themeOf } from './scene/theme.ts';
+import { diskCachedFetcher } from './fonts-node.ts';
+import { embeddedFontCss } from './scene/fonts.ts';
 import { fitToFrame } from './layout/fit.ts';
 import { largestScale } from './layout/scale.ts';
 import { buildAnyScene } from './scene/any.ts';
@@ -115,7 +117,8 @@ if (layout.template && scene.kind === 'graph' && scene.template) reportTemplate(
 if (values.to) writeConverted(values.to, file);
 else {
   const out = values.out ?? file.replace(DIAGRAM_FILE, '') + (pageKey ? `-${pageKey.replace(/[^\w.-]+/g, '_')}` : '') + '.svg';
-  writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame })));
+  const fontCss = await embeddedFontCss(themeOf(layout.view).webFonts, diskCachedFetcher());
+  writeFileSync(out, renderToStaticMarkup(createElement(DiagramSvg, { scene, frame: layout.view?.frame, fontCss })));
   console.log(`wrote ${out}`);
 }
 
