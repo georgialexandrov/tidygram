@@ -6,7 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/georgialexandrov/tidygram.git"
   },
-  "homepage": "https://georgialexandrov.github.io/tidygram/",
+  "homepage": "https://georgi.alexandrov.dev/tidygram/",
   "version": "0.1.0",
   "private": true,
   "type": "module",
