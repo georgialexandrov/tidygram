@@ -1,4 +1,4 @@
-import type { ArrowHead, ClassKind, DContainer, DEdge, DNode, EdgeKind, NodeKind, ParseWarning, SourceBox } from './types.ts';
+import type { ArrowHead, ClassKind, DContainer, Diagram, DrawnCell, DEdge, DNode, EdgeKind, NodeKind, ParseWarning, SourceBox } from './types.ts';
 import type { ParseOptions, ParseResult } from './parse.ts';
 import { inflateRaw } from './inflate.ts';
 import { decodeEntities, findElement, parseXml, type XmlElement } from './xml.ts';
@@ -78,6 +78,7 @@ interface Cell {
   source?: string;
   target?: string;
   geometry?: XmlElement;
+  styleText: string;
   line: number;
 }
 
@@ -381,6 +382,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
       parent: cellEl.attrs.parent,
       value: value ?? '',
       style: parseStyle(cellEl.attrs.style),
+      styleText: cellEl.attrs.style ?? '',
       vertex: cellEl.attrs.vertex === '1',
       edge: cellEl.attrs.edge === '1',
       source: cellEl.attrs.source,
@@ -389,6 +391,14 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
       line: fixedLine ?? el.line,
     });
   }
+  // Our export marks drawings of sequence/Gantt/timing diagrams on the layer cell: they keep the file's geometry.
+  const mark = cells.find((c) => !c.vertex && !c.edge && c.style.values.has('pumlDrawing'))?.style.values.get('pumlDrawing');
+  const drawing = mark === 'sequence' || mark === 'gantt' || mark === 'timing' ? mark : undefined;
+  const offsetOf = (c: Cell): [number, number] | undefined => {
+    const o = c.geometry?.children.find((e) => e.name === 'mxPoint' && e.attrs.as === 'offset')?.attrs;
+    return o ? [num(o.x), num(o.y)] : undefined;
+  };
+  const drawnOf = (c: Cell): DrawnCell | undefined => (drawing ? { style: c.styleText, ...(offsetOf(c) ? { labelAt: offsetOf(c)! } : {}) } : undefined);
   const byId = new Map(cells.map((c) => [c.id, c]));
   const childrenOf = new Map<string, Cell[]>();
   for (const c of cells) if (c.parent) childrenOf.set(c.parent, [...(childrenOf.get(c.parent) ?? []), c]);
@@ -498,6 +508,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
     const node: DNode = { id: c.id, kind, label: text, parent, sourceBox: box, line };
     if (double) node.double = true;
     if (c.style.values.get('whiteSpace') === 'wrap') node.wrap = true;
+    if (drawing) node.drawn = drawnOf(c);
     readPumlKeys(c.style, node);
     nodes.push(node);
   };
@@ -537,7 +548,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
       const x = Number(s.get(`${which}X`));
       const y = Number(s.get(`${which}Y`));
       const auto = s.get(`pumlAuto${which === 'exit' ? 'Exit' : 'Entry'}`) === '1';
-      if (!auto && s.has(`${which}X`) && s.has(`${which}Y`) && Number.isFinite(x) && Number.isFinite(y)) edge[key] = [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+      if (!auto && s.has(`${which}X`) && s.has(`${which}Y`) && Number.isFinite(x) && Number.isFinite(y)) edge[key] = drawing ? [x, y] : [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
     }
 
     // Labels: the edge's own value, plus `edgeLabel` children placed along it (-1 = source end, 1 = target end).
@@ -553,6 +564,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
       else middle.push(text);
     }
     if (middle.length) edge.label = middle.join('\n');
+    if (drawing) edge.drawn = drawnOf(c);
     edges.push(edge);
   }
 
@@ -561,5 +573,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
     const names = [...unknown.entries()].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ');
     warnings.push({ line: fixedLine ?? 1, text: '', message: `${total} shape${total > 1 ? 's' : ''} drawn as plain boxes (no matching element kind): ${names}` });
   }
-  return withPaging({ diagram: { family: 'description', direction: 'TB', nodes, containers, edges }, warnings });
+  const diagram: Diagram = { family: 'description', direction: 'TB', nodes, containers, edges };
+  if (drawing) Object.assign(diagram, { drawing, ...(model?.attrs.background ? { background: model.attrs.background } : {}) });
+  return withPaging({ diagram, warnings });
 }

@@ -20,9 +20,11 @@ import { attr, foldLabel, html, KIND_STYLE, mxfile, r, viewOnly } from './drawio
  * `verticalAlign=bottom` for messages. Everything a line ends on is a
  * vertex, so the file reads back without loose ends: participants, tasks
  * and signals become boxes and messages/dependencies become lines between
- * them, a plain graph. Reading it back does not give a sequence (or Gantt
+ * them. Reading it back does not give a sequence (or Gantt
  * or timing) model again; the PlantUML/Mermaid sources stay the editable
- * copy.
+ * copy. The file is marked (`pumlDrawing=` on the layer cell), so our reader
+ * opens it as a drawing: the file's geometry as it is, no re-layout, no
+ * re-routing (`Diagram.drawing`).
  */
 export function orderedToDrawio(model: SequenceModel | GanttModel | TimingModel, layout: LayoutFile, given?: AnyScene): ConvertResult {
   const losses = new KindLosses();
@@ -45,7 +47,7 @@ export function orderedToDrawio(model: SequenceModel | GanttModel | TimingModel,
     timingCells(scene, page);
     warnings.push(warn('Timing diagram written as a drawing: signals and messages read back as boxes and lines, not waveforms'));
   }
-  const source = mxfile(page.cells, { background: theme.colors.background });
+  const source = mxfile(page.cells, { background: theme.colors.background, drawing: model.type });
 
   // Map what reads back: participants/tasks/signals → their box, messages → their line.
   const parsed = parseDrawio(source).diagram;
@@ -107,7 +109,8 @@ class Page {
 }
 
 const font = (theme: Theme, size: number, colour: string) => `fontFamily=Helvetica;fontSize=${Math.round(size * 10) / 10};fontColor=${colour};`;
-const frac = (v: number, from: number, size: number) => Math.round(Math.min(1, Math.max(0, size ? (v - from) / size : 0.5)) * 1000) / 1000;
+// Not clamped: a message end a pixel off its bar stays where it is (draw.io takes fractions outside 0..1); four places keep a long lifeline exact.
+const frac = (v: number, from: number, size: number) => Math.round((size ? (v - from) / size : 0.5) * 10000) / 10000;
 /** Where on a box a line is pinned (`exitX/exitY` or `entryX/entryY`), as fractions of the box. */
 const pinAt = (which: 'exit' | 'entry', [x, y]: Point, box: Box) => `${which}X=${frac(x, box.x, box.w)};${which}Y=${frac(y, box.y, box.h)};${which}Dx=0;${which}Dy=0;${which}Perimeter=0;`;
 

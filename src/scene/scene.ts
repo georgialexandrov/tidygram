@@ -16,6 +16,7 @@ const WALL = { outer: 7, inner: 8, top: 3 };
 import { themeOf, type Theme } from './theme.ts';
 import { treeScene } from './tree-scene.ts';
 import { isTreeDiagram } from '../layout/tree.ts';
+import { buildDrawingScene } from './drawing.ts';
 import { buildTemplateScene, nudgeRingTitles, type TemplateScene } from './template.ts';
 
 export interface SceneNode {
@@ -74,6 +75,8 @@ export interface Scene {
   bounds: Box;
   /** Bands, hexagon or rings behind everything, when the layout has a template on. */
   template?: TemplateScene;
+  /** A drawing (`Diagram.drawing`): file geometry as it is; the view draws shapes by their file styles, lines over them. */
+  drawing?: true;
 }
 
 export interface BuildOptions {
@@ -96,6 +99,7 @@ export interface BuildOptions {
 
 /** Turns the parsed model + layout into absolute geometry. Every node must already have a position. */
 export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, options: BuildOptions = {}): Scene {
+  if (diagram.drawing) return buildDrawingScene(diagram, layout); // file geometry, no routing (see drawing.ts)
   const theme = themeOf(layout.view);
   const positions: Positions = {};
   for (const n of diagram.nodes) {

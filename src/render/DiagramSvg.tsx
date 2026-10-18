@@ -8,6 +8,8 @@ import { LINE_HEIGHT, textWidth, type TextBlock } from '../scene/measure.ts';
 import type { Scene, SceneContainer, SceneEdge, SceneNode } from '../scene/scene.ts';
 import { mix, type Theme } from '../scene/theme.ts';
 import { NodeBody } from './nodes.tsx';
+import { DrawnBody } from './DrawnNode.tsx';
+import { drawnShape, drawnStyle } from '../scene/drawing.ts';
 import type { AnyScene } from '../scene/any.ts';
 import { SequenceContent } from './SequenceSvg.tsx';
 import { GanttContent, TimingContent } from './TimeSvg.tsx';
@@ -103,7 +105,9 @@ function NodeViewImpl({ n, theme, ix, selected, depth }: NodeProps) {
   const weight = theme.nodeWeight;
   let body: ReactNode;
 
-  if (n.node.kind === 'actor') {
+  if (n.node.drawn && drawnShape(drawnStyle(n.node.drawn.style))) {
+    body = <DrawnBody n={n} theme={theme} stroke={sel} strokeWidth={strokeWidth} />;
+  } else if (n.node.kind === 'actor') {
     const labelTop = anchor.cy + anchor.h / 2 + 6 * theme.scale;
     body = (
       <>
@@ -590,23 +594,26 @@ export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }
   const theme = scene.theme;
   const tree = mindmapBranches(scene);
   const selectedLine = ix?.selectedEdge ? scene.edges.find((e) => e.edge.id === ix.selectedEdge) : undefined;
+  // A drawing is painted in the file's order: shapes, then the lines over them (closed days and bars must not hide a dependency).
+  const edgeViews = scene.edges.map((e) => {
+    const curve = tree?.curves.get(e.edge.id);
+    return <EdgeView key={e.edge.id} e={e} theme={theme} ix={ix} selected={ix?.selectedEdge === e.edge.id} curve={curve?.d} weight={curve?.w} />;
+  });
   return (
     <g>
       {scene.template && <TemplateBackdrop t={scene.template} theme={theme} />}
       {scene.containers.map((c) => (
         <ContainerView key={c.id} c={c} theme={theme} ix={ix} />
       ))}
-      {scene.edges.map((e) => {
-        const curve = tree?.curves.get(e.edge.id);
-        return <EdgeView key={e.edge.id} e={e} theme={theme} ix={ix} selected={ix?.selectedEdge === e.edge.id} curve={curve?.d} weight={curve?.w} />;
-      })}
+      {!scene.drawing && edgeViews}
       {scene.containers.map((c) => (
         <ContainerTitle key={c.id} c={c} theme={theme} />
       ))}
       {scene.nodes.map((n) => (
         <NodeView key={n.node.id} n={n} theme={theme} ix={ix} selected={ix?.selectedNodes.has(n.node.id) ?? false} depth={tree?.depth.get(n.node.id)} />
       ))}
-      {selectedLine && ix && <EndHandles e={selectedLine} ix={ix} />}
+      {scene.drawing && edgeViews}
+      {selectedLine && ix && !scene.drawing && <EndHandles e={selectedLine} ix={ix} />}
     </g>
   );
 }
