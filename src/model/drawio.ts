@@ -41,7 +41,7 @@ function parseStyle(style: string | undefined): Style {
 }
 
 /**
- * puml-layout's own style keys (draw.io keeps unknown keys), written by our
+ * tidygram's own style keys (draw.io keeps unknown keys), written by our
  * draw.io export: class flavour, stereotype and the label lines folded in
  * for draw.io's eyes (`pumlHead` lines above the name, `pumlTail` under it:
  * a `[technology]` line when `pumlTechnology` is set, then the description),

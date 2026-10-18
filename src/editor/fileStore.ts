@@ -33,7 +33,7 @@ interface Entry {
 }
 const memory = new Map<string, Entry>();
 
-const LS = 'puml-layout:layout:';
+const LS = 'tidygram:layout:';
 function lsGet(file: string): string | null {
   try {
     return localStorage.getItem(LS + file);

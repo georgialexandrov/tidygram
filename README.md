@@ -1,4 +1,4 @@
-# puml-layout
+# tidygram
 
 Make diagrams you don't own look right, without touching them. The source
 (`diagram.puml`, `.mmd` or `.drawio`) stays exactly as its author wrote it; everything you change
@@ -412,7 +412,7 @@ Delete still work); nothing wraps.
 
 **Open file…** (or drop files anywhere on the window) opens `.puml .plantuml .pu .mmd .mermaid .drawio .xml` from disk; pick or drop `x.layout.json` together with a diagram and both load. Opened files live in memory under `opened/` in the picker and the source is never written. **Save** writes the sidecar: through a file handle where the browser has the File System Access API (Chrome asks once where), otherwise it downloads `x.layout.json`. SVG, PNG and Convert work on opened files like any other.
 
-`pnpm build:demo` builds a static site into `dist/` with no server: every fixture is compiled in as a sample, edits to samples stay in this browser (localStorage), open and drop work as above. `DEMO_BASE=/puml-layout/ pnpm build:demo` for a sub-path (default `./`, which works from any folder). Check it with `DEMO_BASE=/x/ pnpm build:demo && CDP_PORT=9333 node scripts/smoke-demo.mjs out`.
+`pnpm build:demo` builds a static site into `dist/` with no server: every fixture is compiled in as a sample, edits to samples stay in this browser (localStorage), open and drop work as above. `DEMO_BASE=/tidygram/ pnpm build:demo` for a sub-path (default `./`, which works from any folder). Check it with `DEMO_BASE=/x/ pnpm build:demo && CDP_PORT=9333 node scripts/smoke-demo.mjs out`.
 
 ## Themes
 

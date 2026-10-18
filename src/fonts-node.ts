@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { CHROME_UA, type Fetcher } from './scene/fonts.ts';
 
 /** Where downloaded font files and stylesheets live between renders. */
-export const FONT_CACHE_DIR = process.env.PUML_LAYOUT_CACHE || join(homedir(), '.cache', 'puml-layout', 'fonts');
+export const FONT_CACHE_DIR = process.env.TIDYGRAM_CACHE || join(homedir(), '.cache', 'tidygram', 'fonts');
 
 /** Stylesheets name woff2 files that Google rotates, so they expire; the woff2 files are addressed by URL and never do. */
 export const CSS_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -17,8 +17,8 @@ const keyOf = (url: string) => url.replace(/^https?:\/\//, '').replace(/[^\w.-]+
  * `undefined`, which callers treat as "use system fonts".
  */
 export function diskCachedFetcher(dir = FONT_CACHE_DIR, fetchImpl: typeof fetch = fetch, now = () => Date.now()): Fetcher {
-  // PUML_LAYOUT_OFFLINE=1 skips the network entirely (tests, planes).
-  const offline = !!process.env.PUML_LAYOUT_OFFLINE;
+  // TIDYGRAM_OFFLINE=1 skips the network entirely (tests, planes).
+  const offline = !!process.env.TIDYGRAM_OFFLINE;
   return async (url, kind) => {
     const path = join(dir, keyOf(url));
     const cached = existsSync(path);

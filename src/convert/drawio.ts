@@ -193,7 +193,7 @@ export function viewOnly(layout: LayoutFile, warnings: ParseWarning[]): LayoutFi
 export function mxfile(cells: string[], options: { backdrop?: string[]; background?: string; drawing?: 'sequence' | 'gantt' | 'timing' } = {}): string {
   const background = options.background ? ` background="${attr(options.background)}"` : '';
   return [
-    '<mxfile host="puml-layout">',
+    '<mxfile host="tidygram">',
     '  <diagram id="page-1" name="Page-1">',
     `    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0"${background}>`,
     '      <root>',

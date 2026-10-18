@@ -115,7 +115,7 @@ describe('paper web fonts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'puml-cli-'));
     const out = join(dir, 'fd.svg');
     const stdout = execFileSync('npx', ['tsx', 'src/cli.ts', 'fixtures/component.puml', '-o', out, '--theme', 'paper', '--reset', '--no-write'], {
-      env: { ...process.env, PUML_LAYOUT_CACHE: join(dir, 'cache'), PUML_LAYOUT_OFFLINE: '1' },
+      env: { ...process.env, TIDYGRAM_CACHE: join(dir, 'cache'), TIDYGRAM_OFFLINE: '1' },
       encoding: 'utf8',
       timeout: 60_000,
     });

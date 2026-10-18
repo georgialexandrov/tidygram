@@ -1,5 +1,12 @@
 {
-  "name": "puml-layout",
+  "name": "tidygram",
+  "description": "Make PlantUML, Mermaid and draw.io diagrams you don't own look right: layout lives in a sidecar, the source is never touched.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/georgialexandrov/tidygram.git"
+  },
+  "homepage": "https://georgialexandrov.github.io/tidygram/",
   "version": "0.1.0",
   "private": true,
   "type": "module",

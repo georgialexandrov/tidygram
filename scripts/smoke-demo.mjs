@@ -44,7 +44,7 @@ try {
     const at = await centreOf(`svg g[data-id="${id}"]`);
     await drag(at, [at[0] + 60, at[1] + 40], 10, 1);
     await sleep(500);
-    const stored = await evaluate(`localStorage.getItem('puml-layout:layout:component.puml')`);
+    const stored = await evaluate(`localStorage.getItem('tidygram:layout:component.puml')`);
     check(!!stored && JSON.parse(stored).nodes[id]?.pinned === true, `drag of ${id} kept in localStorage`);
     check((await evaluate(`!!document.querySelector('[data-action=save-layout]')`)) === true, 'Save layout button shown for a sample');
 

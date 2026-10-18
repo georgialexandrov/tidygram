@@ -290,9 +290,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const frozenTemplate = useRef<TemplateScene | undefined>(undefined);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showWarnings, setShowWarnings] = useState(false);
-  const [grid, setGrid] = useState(() => localStorage.getItem('puml-layout:grid') !== 'off');
+  const [grid, setGrid] = useState(() => localStorage.getItem('tidygram:grid') !== 'off');
   const [busy, setBusy] = useState<string | null>(null);
-  const [showSource, setShowSource] = useState(() => localStorage.getItem('puml-layout:source') === 'on');
+  const [showSource, setShowSource] = useState(() => localStorage.getItem('tidygram:source') === 'on');
   /** Space held (ready to pan) or a pan in progress: drives the grab cursor. */
   const [panning, setPanning] = useState(false);
   const spaceHeld = useRef(false);
@@ -947,7 +947,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const toggleSource = useCallback((on?: boolean) => {
     setShowSource((prev) => {
       const next = on ?? !prev;
-      localStorage.setItem('puml-layout:source', next ? 'on' : 'off');
+      localStorage.setItem('tidygram:source', next ? 'on' : 'off');
       return next;
     });
   }, []);
@@ -1339,9 +1339,8 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         </div>
       )}
       <header className="toolbar">
-        <div className="nameplate" aria-label="puml layout">
-          <span className="nameplate-name">puml</span>
-          <span className="nameplate-model">Layout</span>
+        <div className="nameplate" aria-label="tidygram">
+          <span className="nameplate-name">tidygram</span>
         </div>
         <FilePicker files={listed} file={file} onPick={pickFile} />
         <button className="open-file" data-action="open-file" onClick={() => void openDialog()} title="Open a diagram from disk (or drop files on the window); pick x.layout.json together with it to load both">
@@ -1505,7 +1504,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
                   checked={grid}
                   onChange={(e) => {
                     setGrid(e.target.checked);
-                    localStorage.setItem('puml-layout:grid', e.target.checked ? 'on' : 'off');
+                    localStorage.setItem('tidygram:grid', e.target.checked ? 'on' : 'off');
                   }}
                 />
                 Grid
