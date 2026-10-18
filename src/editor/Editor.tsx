@@ -711,7 +711,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         // Grabbing a line and pulling it adds a bend under the pointer.
         const { layout: base, index } = insertVia(d.before, doc.diagram, d.id, [Math.round(p[0]), Math.round(p[1])]);
         if (index < 0) return;
-        drag.current = { kind: 'via', id: d.id, index, before: d.before, base, moved: true };
+        drag.current = { kind: 'via', id: d.id, index, before: d.before, base, moved: true, latest: base };
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
         setLayout(base);
         break;
