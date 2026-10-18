@@ -1,4 +1,6 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, statSync, utimesSync, readdirSync, readFileSync as rf } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { CSS_TTL_MS } from '../src/fonts-node.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createElement } from 'react';
@@ -82,6 +84,46 @@ describe('paper web fonts', () => {
     expect(calls).toBe(online);
     expect(await embeddedFontCss(PAPER_WEB_FONTS, diskCachedFetcher(join(dir, 'empty'), down))).toBe('');
   });
+
+  it('refetches stylesheets older than the TTL, keeps the old copy when that fails, never expires woff2', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'puml-fonts-'));
+    const calls: string[] = [];
+    const net = (async (url: string) => (calls.push(url), new Response(url.includes('css2') ? GOOGLE_CSS : new Uint8Array([9, 9])))) as unknown as typeof fetch;
+    const down = (async () => { throw new Error('offline'); }) as unknown as typeof fetch;
+    const first = await embeddedFontCss(PAPER_WEB_FONTS, diskCachedFetcher(dir, net));
+    const fetched = calls.length;
+    const age = (ms: number) => {
+      for (const f of readdirSync(dir)) {
+        const t = new Date(Date.now() - ms);
+        utimesSync(join(dir, f), t, t);
+      }
+    };
+    age(CSS_TTL_MS / 2);
+    await embeddedFontCss(PAPER_WEB_FONTS, diskCachedFetcher(dir, net));
+    expect(calls.length).toBe(fetched);
+    age(CSS_TTL_MS + 1000);
+    expect(await embeddedFontCss(PAPER_WEB_FONTS, diskCachedFetcher(dir, down))).toBe(first); // stale but refetch fails
+    await embeddedFontCss(PAPER_WEB_FONTS, diskCachedFetcher(dir, net));
+    expect(calls.length).toBe(fetched + 1); // only the stylesheet; woff2 files stay
+    expect(calls[calls.length - 1]).toContain('css2');
+    const css = readdirSync(dir).find((f) => f.includes('css2'))!;
+    expect(Date.now() - statSync(join(dir, css)).mtimeMs).toBeLessThan(60_000);
+    expect(rf(join(dir, css), 'utf8')).toBe(GOOGLE_CSS);
+  });
+
+  it('CLI render with no network and an empty cache still writes an SVG without @font-face', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'puml-cli-'));
+    const out = join(dir, 'fd.svg');
+    const stdout = execFileSync('npx', ['tsx', 'src/cli.ts', 'fixtures/component.puml', '-o', out, '--theme', 'paper', '--reset', '--no-write'], {
+      env: { ...process.env, PUML_LAYOUT_CACHE: join(dir, 'cache'), PUML_LAYOUT_OFFLINE: '1' },
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(stdout).toContain(`wrote ${out}`);
+    const svg = rf(out, 'utf8');
+    expect(svg.startsWith('<svg')).toBe(true);
+    expect(svg.includes('@font-face')).toBe(false);
+  }, 70_000);
 
   it('export carries @font-face for paper themes and none for the others', async () => {
     const require = createRequire(import.meta.url);
