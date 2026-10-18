@@ -1,3 +1,4 @@
+import { isTreeDiagram } from '../src/layout/tree.ts';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -30,7 +31,8 @@ async function measureAll(): Promise<{ name: string; q: Quality }[]> {
   const out: { name: string; q: Quality }[] = [];
   for (const file of FIXTURES) {
     const { diagram } = parseDiagram(readFileSync(join(root, file), 'utf8'), file);
-    if (diagram.special || !diagram.nodes.length) continue;
+    // Trees (mindmap, WBS) draw their own curves and elbows: nothing is routed, so there is nothing to measure.
+    if (diagram.special || !diagram.nodes.length || isTreeDiagram(diagram)) continue;
     const modes: LayoutMode[] = file.endsWith('.drawio') ? ['reset', 'auto'] : ['auto'];
     for (const mode of modes) {
       const layout = await ensureLayout(diagram, emptyLayout(), mode);

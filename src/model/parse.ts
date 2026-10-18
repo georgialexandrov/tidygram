@@ -842,6 +842,7 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
   const stack: DNode[] = [];
   const ids = new Map<string, number>();
   let direction: Diagram['direction'] = family === 'wbs' ? 'TB' : 'LR';
+  let directive: 'left' | 'right' | undefined;
   let multiline: { node: DNode; body: string[] } | undefined;
   for (const { no, raw, text } of lines) {
     if (multiline) {
@@ -853,7 +854,11 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
       continue;
     }
     if (!text || text.startsWith("'") || text.startsWith('@') || text.startsWith('!')) continue;
-    if (/^(left|right)\s+side$/i.test(text)) continue;
+    const sideLine = /^(left|right)\s+side$/i.exec(text);
+    if (sideLine) {
+      directive = sideLine[1]!.toLowerCase() as 'left' | 'right';
+      continue;
+    }
     if (/^top\s+to\s+bottom\s+direction$/i.test(text)) {
       direction = 'TB';
       continue;
@@ -880,6 +885,10 @@ function parseTree(lines: Line[], family: 'mindmap' | 'wbs'): ParseResult {
       else multiline = { node, body: [label] };
     }
     if (m[2]) node.stereotype = 'boxless';
+    if (family === 'mindmap' && depth === 2) {
+      const side = m[1]![0] === '+' ? 'right' : m[1]![0] === '-' ? 'left' : directive;
+      if (side) node.side = side;
+    }
     nodes.push(node);
     stack.length = depth - 1;
     const parent = stack[depth - 2];
