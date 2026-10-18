@@ -151,7 +151,9 @@ function sequenceCells(scene: SequenceScene, page: Page): void {
   const anchors: { id: string; box: Box }[] = [];
   const lifelines = new Map<string, { id: string; box: Box }[]>();
   const cuts = [...scene.delays].sort((a, b) => a.y0 - b.y0);
-  const lifeStroke = theme.plantuml ? c.shapeStroke : c.grid;
+  // Same stroke as SequenceSvg draws: colour, 1 px width and dash.
+  const lifeStroke = theme.plantuml ? c.line : mix(c.grid, c.line, 0.5);
+  const lifeDash = `dashed=1;strokeWidth=1;dashPattern=${+((theme.plantuml ? 5 : 4) * theme.scale).toFixed(2)} ${+(4 * theme.scale).toFixed(2)};`;
   for (const l of scene.lifelines) {
     // A box whose left border is the lifeline: unlike a rotated `line` shape, its exit/entry fractions aren't turned.
     const segment = (y0: number, y1: number, style: string, name: string) => {
@@ -164,12 +166,12 @@ function sequenceCells(scene: SequenceScene, page: Page): void {
     for (const d of cuts) {
       if (d.y1 <= y || d.y0 >= l.y1) continue;
       const from = Math.max(y, d.y0);
-      if (from > y) parts.push(segment(y, from, 'dashed=1;', `${l.id}-lifeline`));
+      if (from > y) parts.push(segment(y, from, lifeDash, `${l.id}-lifeline`));
       const to = Math.min(l.y1, d.y1);
-      segment(from, to, `dashed=1;dashPattern=1 4;strokeWidth=1.5;strokeColor=${theme.plantuml ? c.shapeStroke : mix(c.grid, c.line, 0.5)};`, `${l.id}-delay`);
+      segment(from, to, `dashed=1;dashPattern=${theme.scale} ${4 * theme.scale};strokeWidth=1.5;strokeColor=${lifeStroke};`, `${l.id}-delay`);
       y = to;
     }
-    if (l.y1 > y || !parts.length) parts.push(segment(y, l.y1, 'dashed=1;', `${l.id}-lifeline`));
+    if (l.y1 > y || !parts.length) parts.push(segment(y, l.y1, lifeDash, `${l.id}-lifeline`));
     lifelines.set(l.id, parts);
   }
   const barFill = theme.plantuml ? c.shapeFill : accentTint(theme, 0.12);
