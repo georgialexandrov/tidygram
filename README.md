@@ -140,16 +140,41 @@ each warned once per kind):
 | Family | → PlantUML | → Mermaid | → draw.io |
 |---|---|---|---|
 | use case / component / deployment, draw.io | ✅ description syntax (draw.io's rounded boxes, diamonds, ellipses ≈ rectangle, hexagon, use case) | ≈ flowchart (actors, components, use cases ≈ boxes; triangle/diamond ends ≈ arrows; no end labels) | ✅ (use case ≈ ellipse, queue ≈ cylinder, storage ≈ rounded box) |
-| class / object | ✅ | ✅ classDiagram (compartments beyond fields/methods merge) | ≈ UML class tables (read back as entities, stereotypes lost) |
+| class / object | ✅ | ✅ classDiagram (compartments beyond fields/methods merge) | ✅ UML class tables: a `«interface»`/`«enum»`/`«stereotype»` line above the name, abstract names in italics, kind and stereotype kept in `pumlClassKind`/`pumlStereotype` style keys |
 | ER (crow's foot) | ✅ | ✅ erDiagram (rows reformatted to `type name PK "comment"`) | ✅ tables |
-| state | ✅ | ✅ stateDiagram-v2 (one arrow per transition; history ≈ state) | ≈ pseudo-states and states as ellipses/rounded boxes; descriptions lost |
-| C4 | ✅ C4 macros | ≈ flowchart, descriptions lost | ≈ boxes, descriptions lost |
+| state | ✅ | ✅ stateDiagram-v2 (one arrow per transition; history ≈ state) | ≈ pseudo-states and states as ellipses/rounded boxes (descriptions as small lines under the name) |
+| C4 | ✅ C4 macros | ≈ flowchart; `[technology]` and description as `<small>` lines under the name | ≈ boxes; `[technology]` and description as small lines under the name |
 | ArchiMate, Chen, nwdiag, JSON/YAML | ≈ component/class syntax (filled-dot ends ≈ circle; JSON tables ≈ objects) | ≈ flowchart / classDiagram | ✅ / ≈ (JSON tables, network bars ≈ boxes) |
 | activity | ≈ component-style graph: activity syntax isn't regenerated from a graph | ≈ flowchart (decisions ≈ diamonds) | ≈ (decisions ≈ rhombus) |
 | mindmap / WBS | ✅ | ✅ mindmap (one root; WBS becomes a mindmap) | ≈ rounded boxes |
-| sequence | ✅ | ≈ (dividers, delays, spaces, lost/found messages, half/circle heads dropped) | not yet |
-| Gantt | ✅ (tasks pinned to dates; `->` keeps dependencies) | ≈ (dependencies kept as `after` where the dates agree; partial completion and colours other than crit lost) | not yet |
-| timing | ✅ | no Mermaid equivalent | not yet |
+| sequence | ✅ | ≈ (dividers, delays, spaces, lost/found messages, half/circle heads dropped) | ≈ a drawing (see below) |
+| Gantt | ✅ (tasks pinned to dates; `->` keeps dependencies) | ≈ (dependencies kept as `after` where the dates agree; partial completion and colours other than crit lost) | ≈ a drawing |
+| timing | ✅ | no Mermaid equivalent | ≈ a drawing |
+
+**Folded labels in draw.io.** draw.io keeps style keys it doesn't know, so
+the export writes what a box says beyond its name both ways: visibly
+(`«kind»`/`«stereotype»` lines above the name, `[technology]` and
+description lines under it, smaller) and as `pumlHead`/`pumlTail`
+(how many label lines aren't the name), `pumlStereotype`,
+`pumlTechnology` and `pumlClassKind`, which `parseDrawio` uses to take the
+label apart again. A file edited in draw.io keeps them as long as the box
+isn't restyled.
+
+**Sequence, Gantt and timing → draw.io are drawings.** draw.io has no
+sequence or time-axis model, so the built scene is drawn shape by shape in
+the theme's colours and text sizes (page background included): participants
+as their shapes at the top and bottom, lifelines as dashed lines,
+activations as thin boxes, messages as straight lines pinned to their rows
+with the label above, fragments and refs as UML frames, notes as notes;
+Gantt tasks as bars on the date grid (names in the label column, weekends
+tinted, completion as a solid part), milestones as diamonds, sections as
+headings, dependencies as lines; timing lanes with their waveforms,
+concise states as hexagons, messages between lanes. Everything a line ends
+on is a shape, so the file reads back as a plain graph (participants,
+tasks and signals as named boxes, messages and dependencies as lines
+between them), not as a sequence again: the PlantUML or Mermaid source
+stays the editable copy, and our editor shows the read-back file as a free
+diagram, not as the original chart.
 
 Everywhere: PlantUML has no escape for `"` in labels (written as `'`) and
 its reader drops ` #word` / `$word` decorations; draw.io HTML labels collapse
@@ -181,7 +206,7 @@ with two outward lines, and a draw.io file with loosely named swimlanes
 | Template | Picture | Violations |
 |---|---|---|
 | **Layered** | full-width bands top to bottom (default Presentation / Application / Domain / Infrastructure; ArchiMate: Business / Application / Technology), titles in a gutter on the left. Each band is a row (wrapped round-robin into more rows when long); rows are ordered by a few barycentric sweeps (each element under the average of its neighbours in other bands, nearer bands weigh more, same-band neighbours half), packed without overlaps by isotonic regression around those wishes, then improved by adjacent swaps that shorten the lines | a line pointing up (a lower layer using a higher one). `relaxed` (default) lets a realization point up: implementing a higher layer's interface is dependency inversion. `strict` flags those too, and lines that skip a band. ArchiMate defaults to `off` (serving lines point up by design) |
-| **Hexagonal** | the application in a flat-topped hexagon, the domain in its own hexagon inside, application elements above and below it; inbound ports on the left outline, outbound ports on the right (their lollipop or box centre exactly on the line, ordered by their partners); adapters in columns outside: driving left, driven right, what touches a port or the core next to the hexagon, what only adapters reach (users, databases, external systems) one column further out. Adapter panels behind each side | an adapter using the core directly (not through a port); the core or a port depending on an adapter; the domain using the application around it |
+| **Hexagonal** | the application in a flat-topped hexagon, the domain in its own hexagon inside, application elements above and below it; inbound ports on the left outline, outbound ports on the right (their lollipop or box centre exactly on the line, ordered by their partners); adapters in columns outside: driving left, driven right, what touches a port or the core next to the hexagon, what only adapters reach (users, databases, external systems) one column further out. Adapter panels behind each side | an adapter using the core directly (not through a port); the core or a port depending on an adapter; the domain using the application around it; a driving adapter using an outbound port, or a driven adapter using an inbound one (each side has its own ports); a driving adapter using a driven adapter (a controller calling a repository skips the core). Adapters chaining on their own side (UI → controller, repository → database) are fine |
 | **Clean / onion** | concentric rings inside out (default Entities / Use cases / Interface adapters / Frameworks & drivers), drawn as ellipses 1.5× wider than tall (boxes and slides are wide). Each ring's members are spread evenly round it; the angular order follows their neighbours (the circular mean of what they connect to, inner rings first, then all), the whole ring rotated to match; the radius is the smallest that keeps the ring clear of the one inside and its members apart. Titles at the top of each ring | a dependency pointing outward. `relaxed` lets the interface adapters use the frameworks & drivers ring (a repository talking to its database); `strict` flags every outward line |
 
 **Guessing.** Every element gets a template-neutral role first, from the
@@ -260,6 +285,20 @@ box with its contents, pull a line to bend it, double-click a bend to remove
 it, drag labels. Auto layout re-lays out everything that isn't pinned. The
 editor reloads live when the .puml or the layout changes on disk.
 
+**Line ends** (where a line attaches, like draw.io's connection points):
+select a line and its two end handles show (hollow = automatic, filled =
+chosen by hand). Hovering a handle outlines the element it sits on and marks
+its snap points; drag the handle along that outline and it snaps to side
+centres, quarter points and corners on boxes, every 22.5° on ellipses,
+diamonds and pills, within 10 screen px. Hold <kbd>Alt</kbd> to place it
+anywhere on the outline. The line is re-routed live and comes in square to
+the chosen side; release is one undo step. Double-click a handle to make
+that end automatic again; **Straighten** (<kbd>Del</kbd>) clears both ends
+with the bends. Only the attachment moves: what a line connects comes from
+the source, so an end can't be dragged to another element. Chosen ends are
+stored relative to the element, so they survive moves, resizes, Auto layout,
+Fit to frame and templates; **Reset** drops them.
+
 Selection and panning (the **?** key in the toolbar shows this map):
 
 | | |
@@ -271,7 +310,8 @@ Selection and panning (the **?** key in the toolbar shows this map):
 | All / none | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>-A, <kbd>Esc</kbd> |
 | Pan | two-finger scroll or wheel, <kbd>Space</kbd>-drag (also over elements), middle-button drag |
 | Zoom | pinch, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + scroll |
-| No snap | hold <kbd>Alt</kbd> while dragging |
+| Line end | select a line, drag an end handle along the outline; double-click it for automatic |
+| No snap | hold <kbd>Alt</kbd> while dragging (elements and line ends) |
 | Keys | <kbd>U</kbd> unpin, <kbd>Del</kbd> straighten line, <kbd>F</kbd> fit view, <kbd>S</kbd> source, <kbd>Cmd</kbd>-Z / <kbd>Shift</kbd>-<kbd>Cmd</kbd>-Z |
 
 Sequence, Gantt and timing diagrams keep one selected element at a time, and
@@ -425,7 +465,8 @@ Per type:
         "UC_Login": { "x": 2470, "y": 1012 }
       },
       "edges": {
-        "UC_Pay-->PSP": { "via": [[2223, 395]], "label": [0, -8] }
+        "UC_Pay-->PSP": { "via": [[2223, 395]], "label": [0, -8] },
+        "UC_Login-->Auth": { "from": { "x": 1, "y": 0.5, "side": "right" }, "to": { "x": 0.25, "y": 0, "side": "top" } }
       }
     }
 
@@ -435,6 +476,21 @@ Per type:
   `--|>`, `..`); repeated edges get `#2`, `#3`.
 - `via` are checkpoints the orthogonal route must pass through; `label` is an
   offset from the label's automatic position.
+- `from` / `to` (optional): where the line attaches at its source / target,
+  chosen by hand. `x`, `y` are fractions (0..1) of the element's drawn
+  outline's bounding box (the figure, not an icon's name below it; for a
+  line ending on a container, the container's box), the same convention as
+  draw.io's `exitX`/`exitY` and `entryX`/`entryY`. `side` (`top`, `right`,
+  `bottom`, `left`) is the way the line leaves: it meets the outline square-on
+  from there (on ellipses and diamonds the point is projected onto the outline
+  along that side). Fractions are clamped, a missing side is taken from the
+  nearest edge, and sidecars without them are automatic exactly as before.
+  They win over every automatic attachment (diamond vertices, bars, spread
+  ends); container walls and doors still apply. draw.io files with
+  exit/entry points open with them here, and Convert to draw.io writes them
+  back (ends the router chose are written too, so draw.io draws the same
+  path, but flagged `pumlAutoExit=1`/`pumlAutoEntry=1` so they read back as
+  automatic).
 - Entries for ids that vanish from the source are kept, so a rename can be
   undone without losing the position.
 - **`template`** (optional): the architecture template on this page. While

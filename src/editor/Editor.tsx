@@ -24,7 +24,10 @@ import { largestScale } from '../layout/scale.ts';
 import { convert, formatOf as sourceFormatOf, TARGET_EXTENSION, type ConvertResult, type ConvertTarget } from '../convert/index.ts';
 
 const SIZES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-import { alignmentSnap, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
+import { alignmentSnap, clearEnd, clearVia, insertVia, moveNodes, moveSelection, moveVia, removeVia, setEnd, setLabelOffset, setPinned, sidecarName, viaOf, type Guide } from './edits.ts';
+import { snapAttach, snapPoints } from '../scene/attach.ts';
+import type { AnchorShape } from '../scene/geometry.ts';
+import type { Scene } from '../scene/scene.ts';
 import { addAll, boxFrom, clickSelect, marqueeSelect } from './selection.ts';
 import { FilePicker } from './FilePicker.tsx';
 
@@ -183,12 +186,51 @@ type Drag =
     }
   | { kind: 'edge'; id: string; start: Point; before: LayoutFile }
   | { kind: 'via'; id: string; index: number; before: LayoutFile; base: LayoutFile; moved: boolean }
+  | { kind: 'end'; id: string; end: 'from' | 'to'; start: Point; before: LayoutFile; moved: boolean }
   | { kind: 'label'; id: string; start: Point; origin: Point; before: LayoutFile; moved: boolean }
   | { kind: 'pan'; client: Point; origin: View; moved: boolean }
   | { kind: 'marquee'; start: Point; client: Point; additive: boolean; base: ReadonlySet<string>; box: Box | null };
 
 const DRAG_THRESHOLD = 3;
 const SNAP = 6;
+/** Screen pixels within which a dragged line end jumps to a snap point. */
+const END_SNAP = 10;
+
+/** What a line end attaches to, as an outline: a node's drawn figure, or a container's box. */
+function endOutline(scene: Scene, id: string, end: 'from' | 'to'): { target: string; anchor: AnchorShape } | undefined {
+  const e = scene.edges.find((x) => x.edge.id === id);
+  if (!e) return undefined;
+  const target = end === 'from' ? e.edge.from : e.edge.to;
+  const n = scene.nodes.find((x) => x.node.id === target);
+  if (n) return { target, anchor: n.anchor };
+  const c = scene.containers.find((x) => x.id === target);
+  return c ? { target, anchor: { cx: c.box.x + c.box.w / 2, cy: c.box.y + c.box.h / 2, w: c.box.w, h: c.box.h, dx: 0, dy: 0, shape: 'rect' } } : undefined;
+}
+
+/** draw.io-style feedback for a line end: the outline it moves along, its snap points, and where it would land. */
+function EndHint({ anchor, at, k }: { anchor: AnchorShape; at?: Point; k: number }) {
+  const { cx, cy, w, h } = anchor;
+  const sw = 1.5 / k;
+  const outline =
+    anchor.shape === 'ellipse' ? <ellipse cx={cx} cy={cy} rx={w / 2} ry={h / 2} />
+    : anchor.shape === 'diamond' ? <path d={`M${cx},${cy - h / 2} L${cx + w / 2},${cy} L${cx},${cy + h / 2} L${cx - w / 2},${cy} Z`} />
+    : <rect x={cx - w / 2} y={cy - h / 2} width={w} height={h} rx={anchor.shape === 'pill' ? Math.min(w, h) / 2 : 0} />;
+  const seen = new Set<string>();
+  return (
+    <g className="end-hint" style={{ pointerEvents: 'none' }}>
+      <g fill="none" stroke={EDITOR_COLORS.selected} strokeWidth={sw * 2} strokeOpacity={0.45}>
+        {outline}
+      </g>
+      {snapPoints(anchor).map(({ outline: [x, y] }) => {
+        const key = `${Math.round(x)},${Math.round(y)}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        return <path key={key} d={`M${x - 3 / k},${y - 3 / k} L${x + 3 / k},${y + 3 / k} M${x - 3 / k},${y + 3 / k} L${x + 3 / k},${y - 3 / k}`} stroke={EDITOR_COLORS.selected} strokeWidth={sw} />;
+      })}
+      {at && <circle cx={at[0]} cy={at[1]} r={6 / k} fill={EDITOR_COLORS.selected} fillOpacity={0.25} stroke={EDITOR_COLORS.selected} strokeWidth={sw} />}
+    </g>
+  );
+}
 
 function download(blob: Blob, name: string) {
   const a = document.createElement('a');
@@ -221,6 +263,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
   const [view, setView] = useState<View>({ x: 40, y: 40, k: 1 });
   const [guides, setGuides] = useState<Guide[]>([]);
   const [marquee, setMarquee] = useState<Box | null>(null);
+  /** A line end being hovered or dragged: which line and end, and where it would land. */
+  const [endHint, setEndHint] = useState<{ id: string; end: 'from' | 'to'; at?: Point } | null>(null);
+  const lastEndDown = useRef<{ id: string; end: 'from' | 'to'; t: number } | null>(null);
   /** While dragging with a template on: the layer the drop would move the element into (outlined), if not its own. */
   const [dropLayer, setDropLayer] = useState<string | null>(null);
   /** The template backdrop held still during a node drag (see BuildOptions.frozenTemplate). */
@@ -428,6 +473,11 @@ export function Editor({ avoid }: { avoid: Avoid }) {
 
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
+  const endHintView = useMemo(() => {
+    if (!endHint || scene?.kind !== 'graph' || endHint.id !== selEdge) return null;
+    const target = endOutline(scene, endHint.id, endHint.end);
+    return target ? <EndHint anchor={target.anchor} at={endHint.at} k={view.k} /> : null;
+  }, [endHint, scene, selEdge, view.k]);
   /** Nothing to arrange: an unsupported type, or a file without elements. The canvas shows a panel instead. */
   const blank = !!doc && isBlank(doc.diagram, doc.unsupported);
 
@@ -543,6 +593,30 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       e.stopPropagation();
       commit(removeVia(layoutRef.current, id, index));
     },
+    onEndDown(id, end, e) {
+      if (e.button !== 0 || spaceHeld.current) return;
+      e.stopPropagation();
+      // A second press on the same handle is a double-click: pointer capture sends the browser's dblclick to the canvas.
+      const last = lastEndDown.current;
+      lastEndDown.current = { id, end, t: e.timeStamp };
+      if (last && last.id === id && last.end === end && e.timeStamp - last.t < 400) {
+        lastEndDown.current = null;
+        if (layoutRef.current.edges[id]?.[end]) commit(clearEnd(layoutRef.current, id, end));
+        return;
+      }
+      setSelEdge(id);
+      drag.current = { kind: 'end', id, end, start: toDiagram(e.clientX, e.clientY), before: layoutRef.current, moved: false };
+      setEndHint({ id, end });
+      capture(e);
+    },
+    onEndDoubleClick(id, end, e) {
+      e.stopPropagation();
+      if (layoutRef.current.edges[id]?.[end]) commit(clearEnd(layoutRef.current, id, end));
+    },
+    onEndHover(id, end) {
+      if (drag.current?.kind === 'end') return; // the drag owns the hint
+      setEndHint(end ? { id, end } : null);
+    },
   };
 
   // Elements are memoized, so they get one stable object that forwards to this render's handlers.
@@ -564,6 +638,9 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       onLabelDown: (id, e) => ixRef.current.onLabelDown(id, e),
       onViaDown: (id, i, e) => ixRef.current.onViaDown(id, i, e),
       onViaDoubleClick: (id, i, e) => ixRef.current.onViaDoubleClick(id, i, e),
+      onEndDown: (id, end, e) => ixRef.current.onEndDown!(id, end, e),
+      onEndDoubleClick: (id, end, e) => ixRef.current.onEndDoubleClick!(id, end, e),
+      onEndHover: (id, end) => ixRef.current.onEndHover!(id, end),
     }),
     [],
   );
@@ -632,6 +709,19 @@ export function Editor({ avoid }: { avoid: Avoid }) {
         dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
         setLayout(moveVia(d.base, d.id, d.index, [Math.round(p[0]), Math.round(p[1])]));
         break;
+      case 'end': {
+        if (!d.moved && Math.hypot(p[0] - d.start[0], p[1] - d.start[1]) < DRAG_THRESHOLD / k) return;
+        const s = sceneRef.current;
+        const target = s?.kind === 'graph' ? endOutline(s, d.id, d.end) : undefined;
+        if (!target) return;
+        d.moved = true;
+        // Only the attachment moves along the outline: the source says what the line connects.
+        const snapped = snapAttach(target.anchor, p, END_SNAP / k, e.altKey);
+        dirty.current = { nodes: new Set(), edges: new Set([d.id]) };
+        setLayout(setEnd(d.before, d.id, d.end, snapped.attach));
+        setEndHint({ id: d.id, end: d.end, at: snapped.outline });
+        break;
+      }
       case 'label': {
         const dx = p[0] - d.start[0];
         const dy = p[1] - d.start[1];
@@ -678,6 +768,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
       }
       case 'via':
       case 'label':
+        if (d.moved) commit({ ...layoutRef.current }, d.before);
+        break;
+      case 'end':
+        setEndHint(null);
         if (d.moved) commit({ ...layoutRef.current }, d.before);
         break;
       case 'pan':
@@ -1119,7 +1213,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
           <button className="selection-key" disabled={!selNodes.size} onClick={() => commit(setPinned(layoutRef.current, selNodes, false))} title="Unpin selected (U)">
             Unpin
           </button>
-          <button className="selection-key" disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends from the selected line (Delete)">
+          <button className="selection-key" disabled={!selEdge} onClick={() => selEdge && commit(clearVia(layoutRef.current, selEdge))} title="Remove bends and hand-chosen ends from the selected line (Delete)">
             Straighten
           </button>
         </div>
@@ -1407,6 +1501,10 @@ export function Editor({ avoid }: { avoid: Avoid }) {
             </dd>
             <dt>Bend</dt>
             <dd>pull a line; double-click a bend to remove</dd>
+            <dt>Line end</dt>
+            <dd>
+              select a line, drag an end handle along the outline; snaps to side centres, quarters and corners (<kbd>Alt</kbd>: anywhere). Double-click the handle: automatic again. Only where it attaches moves; what it connects comes from the source
+            </dd>
             <dt>Layer</dt>
             <dd>with a template on, drag into another band, ring or zone</dd>
             <dt>No snap</dt>
@@ -1458,6 +1556,7 @@ export function Editor({ avoid }: { avoid: Avoid }) {
               ),
             )}
             {marquee && <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" />}
+            {endHintView}
           </g>
         </svg>
         {doc && blank && <BlankPanel doc={doc} onWarnings={() => setShowWarnings(true)} />}

@@ -59,9 +59,10 @@ describe('picture quality over every fixture', () => {
   it('lines take few corners and no tiny steps, and meet boxes square-on', () => {
     const sum = (k: 'bends' | 'jogs' | 'skewEnds') => results.reduce((n, r) => n + r.q[k], 0);
     // Measured 2026-10-18: bends 466, jogs 17, skew ends 9 (actors with many lines); before this pass 571 / 54 / 10.
+    // Then (spread ends, actor ports, wrapped rows): bends 479 (the state machine now wraps into rows: +18), jogs 18, skew ends 0.
     expect(sum('bends')).toBeLessThanOrEqual(500);
     expect(sum('jogs')).toBeLessThanOrEqual(20);
-    expect(sum('skewEnds')).toBeLessThanOrEqual(12);
+    expect(sum('skewEnds')).toBeLessThanOrEqual(1);
   });
 
   it('auto layout lands near the proportions of a window', () => {
@@ -81,8 +82,8 @@ describe('label placement', () => {
     const results = await measureAll();
     const pick = (prefix: string) => results.flatMap((r) => r.q.details.filter((d) => d.startsWith(prefix)).map((d) => `${r.name}: ${d}`));
     expect(pick('label:')).toEqual([]);
-    // A multiplicity between two parallel lines into the same side has nowhere clean to go.
-    expect(pick('label-line:').length).toBeLessThanOrEqual(2);
+    // Ends with a multiplicity get a line of text's room from their neighbours (ports.ts `untangle`).
+    expect(pick('label-line:').length).toBeLessThanOrEqual(1);
   }, 60_000);
 
   it('leaves a dragged label where the user put it, and reports the placed offset otherwise', async () => {

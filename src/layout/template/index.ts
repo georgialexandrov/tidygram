@@ -3,7 +3,7 @@ import type { Positions } from '../../scene/containers.ts';
 import { nodeShape } from '../../scene/shapes.ts';
 import { regionAt, type TemplateScene } from '../../scene/template.ts';
 import { themeOf } from '../../scene/theme.ts';
-import type { LayoutFile, NodeLayout, Point, TemplateKind, TemplateSettings } from '../layout-file.ts';
+import { chosenEnds, type LayoutFile, type NodeLayout, type Point, type TemplateKind, type TemplateSettings } from '../layout-file.ts';
 import { defaultLayer } from './defs.ts';
 import { guessLayers, type Guess } from './guess.ts';
 import { placeTemplate, type PlaceOptions } from './place.ts';
@@ -59,7 +59,7 @@ export function applyTemplate(diagram: Diagram, layout: LayoutFile, kind: Templa
   base.free = current?.free ?? { nodes: layout.nodes, edges: layout.edges };
   const positions = placeTemplate(diagram, base, themeOf(layout.view), options);
   // Bends were drawn for another arrangement.
-  return { ...withPositions(diagram, layout, base, positions, () => false), edges: {} };
+  return { ...withPositions(diagram, layout, base, positions, () => false), edges: chosenEnds(layout.edges) };
 }
 
 /** Turns the template off: the free layout from before comes back (new elements get placed by `ensureLayout`). */
@@ -95,7 +95,7 @@ export function relayoutTemplate(diagram: Diagram, layout: LayoutFile, options: 
   const template = { ...layout.template!, guess: guessMap(diagram, layout.template!).guess };
   const hints: Positions = Object.fromEntries(diagram.nodes.filter((n) => layout.nodes[n.id]?.pinned).map((n) => [n.id, layout.nodes[n.id]!]));
   const positions = placeTemplate(diagram, template, themeOf(layout.view), { ...options, hints: options.hints ?? hints });
-  return { ...withPositions(diagram, layout, template, positions, (id) => layout.nodes[id]?.pinned === true), edges: {} };
+  return { ...withPositions(diagram, layout, template, positions, (id) => layout.nodes[id]?.pinned === true), edges: chosenEnds(layout.edges) };
 }
 
 /**
@@ -106,7 +106,7 @@ export function relayoutTemplate(diagram: Diagram, layout: LayoutFile, options: 
 export function settleTemplate(diagram: Diagram, layout: LayoutFile, options: PlaceOptions = {}): LayoutFile {
   const hints: Positions = Object.fromEntries(diagram.nodes.filter((n) => layout.nodes[n.id]).map((n) => [n.id, layout.nodes[n.id]!]));
   const positions = placeTemplate(diagram, layout.template!, themeOf(layout.view), { ...options, hints });
-  return { ...withPositions(diagram, layout, layout.template!, positions, (id) => layout.nodes[id]?.pinned === true), edges: {} };
+  return { ...withPositions(diagram, layout, layout.template!, positions, (id) => layout.nodes[id]?.pinned === true), edges: chosenEnds(layout.edges) };
 }
 
 /**

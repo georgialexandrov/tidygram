@@ -11,7 +11,7 @@ import { scaledTheme, themeFor, themeOf, type Theme } from '../scene/theme.ts';
 import { containerPad } from '../scene/shapes.ts';
 import { largestScale } from './scale.ts';
 import { elkPositions, shapesFor } from './auto.ts';
-import type { LayoutFile, Point } from './layout-file.ts';
+import { chosenEnds, type LayoutFile, type Point } from './layout-file.ts';
 import { settleTemplate } from './template/index.ts';
 import { buildTemplateScene } from '../scene/template.ts';
 
@@ -298,7 +298,7 @@ export async function fitToFrame(diagram: Diagram, layout: LayoutFile, frame: Po
   );
   for (const n of diagram.nodes) nodes[n.id] = { x: snap(positions[n.id]!.x), y: snap(positions[n.id]!.y) };
   const { scale: _old, ...view } = layout.view ?? {};
-  const fitted: LayoutFile = { ...layout, view: { ...view, frame }, nodes, edges: {} };
+  const fitted: LayoutFile = { ...layout, view: { ...view, frame }, nodes, edges: chosenEnds(layout.edges) };
   // Then grow text and icons into whatever room the stretch left.
   const scaleStarted = performance.now();
   const scale = Math.max(best.candidate.scale, largestScale(diagram, fitted));

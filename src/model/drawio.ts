@@ -1,4 +1,4 @@
-import type { ArrowHead, DContainer, DEdge, DNode, EdgeKind, NodeKind, ParseWarning, SourceBox } from './types.ts';
+import type { ArrowHead, ClassKind, DContainer, DEdge, DNode, EdgeKind, NodeKind, ParseWarning, SourceBox } from './types.ts';
 import type { ParseOptions, ParseResult } from './parse.ts';
 import { inflateRaw } from './inflate.ts';
 import { decodeEntities, findElement, parseXml, type XmlElement } from './xml.ts';
@@ -38,6 +38,34 @@ function parseStyle(style: string | undefined): Style {
     else values.set(t.slice(0, eq).trim(), t.slice(eq + 1).trim());
   }
   return { names, values };
+}
+
+/**
+ * puml-layout's own style keys (draw.io keeps unknown keys), written by our
+ * draw.io export: class flavour, stereotype and the label lines folded in
+ * for draw.io's eyes (`pumlHead` lines above the name, `pumlTail` under it:
+ * a `[technology]` line when `pumlTechnology` is set, then the description).
+ */
+function readPumlKeys(style: Style, node: DNode): void {
+  const v = (k: string) => style.values.get(k);
+  const decode = (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
+  const lines = node.label.split('\n');
+  const tail = Math.min(Number(v('pumlTail')) || 0, lines.length - 1);
+  const under = tail ? lines.splice(lines.length - tail) : [];
+  node.label = lines.slice(Math.min(Number(v('pumlHead')) || 0, lines.length - 1)).join('\n');
+  if (v('pumlTechnology') !== undefined) {
+    node.technology = decode(v('pumlTechnology')!);
+    under.shift();
+  }
+  if (under.length) node.description = under;
+  if (v('pumlClassKind')) node.classKind = v('pumlClassKind') as ClassKind;
+  if (v('pumlStereotype')) node.stereotype = decode(v('pumlStereotype')!);
 }
 
 interface Cell {
@@ -451,7 +479,9 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
 
     const rows = tableRows(c);
     if (rows) {
-      nodes.push({ id: c.id, kind: 'class', classKind: 'entity', label: text, compartments: rows, parent, sourceBox: box, line });
+      const table: DNode = { id: c.id, kind: 'class', classKind: 'entity', label: text, compartments: rows, parent, sourceBox: box, line };
+      readPumlKeys(c.style, table);
+      nodes.push(table);
       for (const k of kids) aliasAll(k.id, c.id);
       return;
     }
@@ -468,6 +498,7 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
     const node: DNode = { id: c.id, kind, label: text, parent, sourceBox: box, line };
     if (double) node.double = true;
     if (c.style.values.get('whiteSpace') === 'wrap') node.wrap = true;
+    readPumlKeys(c.style, node);
     nodes.push(node);
   };
   for (const c of cells) if (c.vertex && isLayer(c.parent)) visit(c);
@@ -500,6 +531,14 @@ export function parseDrawio(source: string, options: ParseOptions = {}): ParseRe
     const points = c.geometry?.children.find((e) => e.name === 'Array' && e.attrs.as === 'points');
     const via = (points?.children ?? []).filter((p) => p.name === 'mxPoint').map((p): [number, number] => [num(p.attrs.x) + ox, num(p.attrs.y) + oy]);
     if (via.length) edge.sourceVia = via;
+    // Fixed connection points. Our own export also pins the ends the router chose, so draw.io draws
+    // the same path; it flags those `pumlAutoExit`/`pumlAutoEntry` and they read back as automatic.
+    for (const [which, key] of [['exit', 'sourceFrom'], ['entry', 'sourceTo']] as const) {
+      const x = Number(s.get(`${which}X`));
+      const y = Number(s.get(`${which}Y`));
+      const auto = s.get(`pumlAuto${which === 'exit' ? 'Exit' : 'Entry'}`) === '1';
+      if (!auto && s.has(`${which}X`) && s.has(`${which}Y`) && Number.isFinite(x) && Number.isFinite(y)) edge[key] = [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+    }
 
     // Labels: the edge's own value, plus `edgeLabel` children placed along it (-1 = source end, 1 = target end).
     const middle: string[] = [];

@@ -30,6 +30,11 @@ export interface Interaction {
   onLabelDown(id: string, e: PointerEvent): void;
   onViaDown(id: string, index: number, e: PointerEvent): void;
   onViaDoubleClick(id: string, index: number, e: MouseEvent): void;
+  /** End handles of the selected line: drag to move where it attaches, double-click to reset. */
+  onEndDown?(id: string, end: 'from' | 'to', e: PointerEvent): void;
+  onEndDoubleClick?(id: string, end: 'from' | 'to', e: MouseEvent): void;
+  /** Pointer over an end handle (or off it: `end` null): the editor shows the outline and its snap points. */
+  onEndHover?(id: string, end: 'from' | 'to' | null): void;
 }
 
 function ActorFigure({ n, theme, stroke, strokeWidth }: { n: SceneNode; theme: Theme; stroke?: string; strokeWidth: number }) {
@@ -258,7 +263,7 @@ function ContainerTitleImpl({ c, theme }: { c: SceneContainer; theme: Theme }) {
   const caps = theme.containerTitle === 'caps';
   const block: TextBlock = { lines: [c.label], width: 0, height: size * LINE_HEIGHT, size };
   const textW = textWidth(caps ? c.label.toUpperCase() : c.label, size, true, theme.widthFactor) + (caps ? 0.08 * size * c.label.length : 0);
-  const left = caps ? x + 14 * k : x + w / 2 - textW / 2;
+  const left = (caps ? x + 14 * k : x + w / 2 - textW / 2) + (c.titleShift ?? 0);
   const top = caps ? y + 10 * k + d3 : y + 6 * k;
   return (
     <g style={{ pointerEvents: 'none' }}>
@@ -474,6 +479,41 @@ function EdgeViewImpl({ e, theme, ix, selected, curve, weight }: EdgeProps) {
   );
 }
 
+/** End handles of the selected line, drawn above the nodes (an end sits on a node's outline, which would catch the pointer). */
+function EndHandles({ e, ix }: { e: SceneEdge; ix: Interaction }) {
+  const id = e.edge.id;
+  const pts = e.points;
+  if (pts.length < 2 || !ix.onEndDown) return null;
+  return (
+    <g className="end-handles" data-end-handles={id}>
+      {(['from', 'to'] as const).map((end) => {
+        const [x, y] = end === 'from' ? pts[0]! : pts[pts.length - 1]!;
+        const fixed = e.fixedEnds?.[end];
+        return (
+          <circle
+            key={end}
+            data-end={end}
+            cx={f(x)}
+            cy={f(y)}
+            r={5}
+            // Filled: chosen by hand; hollow: automatic.
+            fill={fixed ? EDITOR_COLORS.selected : '#FFFFFF'}
+            stroke={EDITOR_COLORS.selected}
+            strokeWidth={1.5}
+            style={{ cursor: 'crosshair' }}
+            onPointerDown={(ev) => ix.onEndDown?.(id, end, ev)}
+            onDoubleClick={(ev) => ix.onEndDoubleClick?.(id, end, ev)}
+            onPointerEnter={() => ix.onEndHover?.(id, end)}
+            onPointerLeave={() => ix.onEndHover?.(id, null)}
+          >
+            <title>{fixed ? 'Drag to move where the line attaches · double-click: back to automatic' : 'Drag along the outline to choose where the line attaches'}</title>
+          </circle>
+        );
+      })}
+    </g>
+  );
+}
+
 /**
  * A dependency that breaks the template's rule: a warning triangle on the
  * line, a third of the way along (the middle is the label's), with the reason
@@ -544,6 +584,7 @@ function mindmapBranches(scene: Scene): { depth: Map<string, number>; curves: Ma
 export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }) {
   const theme = scene.theme;
   const tree = mindmapBranches(scene);
+  const selectedLine = ix?.selectedEdge ? scene.edges.find((e) => e.edge.id === ix.selectedEdge) : undefined;
   return (
     <g>
       {scene.template && <TemplateBackdrop t={scene.template} theme={theme} />}
@@ -560,6 +601,7 @@ export function DiagramContent({ scene, ix }: { scene: Scene; ix?: Interaction }
       {scene.nodes.map((n) => (
         <NodeView key={n.node.id} n={n} theme={theme} ix={ix} selected={ix?.selectedNodes.has(n.node.id) ?? false} depth={tree?.depth.get(n.node.id)} />
       ))}
+      {selectedLine && ix && <EndHandles e={selectedLine} ix={ix} />}
     </g>
   );
 }

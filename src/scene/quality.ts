@@ -158,7 +158,9 @@ export function measureQuality(scene: Scene, diagram: Diagram): Quality {
       const n = nodes.get(nodeId);
       if (!n || line.length < 2) continue;
       const a = n.anchor;
-      const ok = a.shape === 'rect' ? squareEnd(line, { x: a.cx - a.w / 2, y: a.cy - a.h / 2, w: a.w, h: a.h }) : onOutline(line, a);
+      // An icon with its name below (actors) is also met square from underneath the name.
+      const underName = n.box.y + n.box.h > a.cy + a.h / 2 + 2 && squareEnd(line, n.box) && Math.abs(line[line.length - 1]![1] - n.box.y - n.box.h) < 1.5;
+      const ok = underName || (a.shape === 'rect' ? squareEnd(line, { x: a.cx - a.w / 2, y: a.cy - a.h / 2, w: a.w, h: a.h }) : onOutline(line, a));
       if (!ok) {
         q.skewEnds++;
         q.details.push(`end: ${id} at ${nodeId}`);
@@ -204,7 +206,9 @@ function onOutline(line: Point[], a: Parameters<typeof inside>[0]): boolean {
   const [px, py] = line[line.length - 2]!;
   const len = Math.hypot(x - px, y - py) || 1;
   const step: Point = [x + ((x - px) / len) * 2, y + ((y - py) / len) * 2];
-  return !inside(a, [x, y]) && inside(a, step);
+  // Half a pixel back along the line must be outside (exactly on a vertex, rounding can put the end itself a hair in).
+  const back: Point = [x - ((x - px) / len) * 0.5, y - ((y - py) / len) * 0.5];
+  return !inside(a, back) && inside(a, step);
 }
 
 /** Number of proper crossings between the orthogonal segments of different lines. */

@@ -24,7 +24,7 @@ const FIXTURES = [
 const TARGETS: ConvertTarget[] = ['puml', 'mermaid', 'drawio'];
 
 /** Fixture × target pairs the target can't express at all. */
-const UNSUPPORTED = new Set(['gantt.puml → drawio', 'sequence.puml → drawio', 'timing.puml → drawio', 'timing.puml → mermaid', 'mermaid/gantt.mmd → drawio', 'mermaid/sequence.mmd → drawio']);
+const UNSUPPORTED = new Set(['timing.puml → mermaid']);
 
 /**
  * Every difference between a fixture and its converted, re-read twin, by
@@ -40,41 +40,37 @@ const LOSSES: Record<string, string[]> = {
   // ArchiMate's filled-dot (assignment) end has no PlantUML arrow token.
   'archimate.puml → puml': ['edge tail dot→circle'],
   'archimate.puml → mermaid': ['edge head diamondFilled→arrow', 'edge head triangle→arrow', 'edge kind composition→association', 'edge kind realization→dependency', 'edge tail dot→arrow', 'node kind circle→attribute', 'stereotype'],
-  'archimate.puml → drawio': ['node kind circle→attribute', 'stereotype'],
-  'c4.puml → mermaid': ['description', 'node kind container→rectangle', 'node kind person→rectangle', 'node kind system→rectangle'],
-  'c4.puml → drawio': ['description', 'node kind container→rectangle', 'node kind person→actor', 'node kind queue→database', 'node kind system→rectangle'],
+  'archimate.puml → drawio': ['node kind circle→attribute'],
+  'c4.puml → mermaid': ['node kind container→rectangle', 'node kind person→rectangle', 'node kind system→rectangle'],
+  'c4.puml → drawio': ['node kind container→rectangle', 'node kind person→actor', 'node kind queue→database', 'node kind system→rectangle'],
   'chen.puml → puml': ['node kind attribute→usecase', 'node kind relationship→hexagon'],
   'chen.puml → mermaid': ['node kind circle→attribute'],
   'chen.puml → drawio': ['node kind circle→attribute'],
-  // draw.io reads every class box back as an entity table.
-  'class.puml → drawio': ['class kind abstract→entity', 'class kind class→entity', 'class kind enum→entity', 'class kind interface→entity', 'stereotype'],
   'component.puml → mermaid': ['node kind actor→rectangle', 'node kind component→rectangle', 'node kind interface→attribute', 'stereotype'],
-  'component.puml → drawio': ['node kind queue→database', 'stereotype'],
+  'component.puml → drawio': ['node kind queue→database'],
   'deployment.puml → mermaid': ['node kind artifact→file', 'node kind node→rectangle'],
   'deployment.puml → drawio': ['node kind artifact→file', 'node kind queue→database', 'node kind storage→action'],
   // Mermaid ER rows are `type name PK "comment"`: the text is reformatted.
   'er.puml → mermaid': ['members'],
   'food-delivery.puml → mermaid': ['edge head triangle→arrow', 'edge kind generalization→association', 'edge kind noteLink→dependency', 'node kind actor→rectangle', 'node kind note→card', 'node kind usecase→action', 'stereotype'],
-  'food-delivery.puml → drawio': ['edge kind noteLink→dependency', 'node kind usecase→attribute', 'stereotype'],
+  'food-delivery.puml → drawio': ['edge kind noteLink→dependency', 'node kind usecase→attribute'],
   'gantt.puml → mermaid': ['task colour', 'task completion'],
   'json.puml → puml': ['class kind json→object'],
   'json.puml → mermaid': ['class kind json→class'],
-  'json.puml → drawio': ['class kind json→entity'],
   'mindmap.puml → drawio': ['node kind topic→action'],
   'nwdiag.puml → puml': ['description', 'node kind network→rectangle'],
-  'nwdiag.puml → mermaid': ['description', 'edge end labels', 'node kind network→rectangle'],
-  'nwdiag.puml → drawio': ['description', 'node kind network→rectangle'],
+  'nwdiag.puml → mermaid': ['edge end labels', 'node kind network→rectangle'],
+  'nwdiag.puml → drawio': ['node kind network→rectangle'],
   // Mermaid has no dividers or delays.
   'sequence.puml → mermaid': ['event sequence'],
-  'state.puml → drawio': ['description', 'edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
+  'state.puml → drawio': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
   'yaml.puml → puml': ['class kind json→object'],
   'yaml.puml → mermaid': ['class kind json→class'],
-  'yaml.puml → drawio': ['class kind json→entity'],
-  'mermaid/class.mmd → drawio': ['class kind abstract→entity', 'class kind class→entity', 'class kind enum→entity', 'class kind interface→entity', 'edge kind noteLink→dependency'],
+  'mermaid/class.mmd → drawio': ['edge kind noteLink→dependency'],
   'mermaid/flowchart.mmd → puml': ['node kind action→rectangle', 'node kind attribute→usecase', 'node kind relationship→hexagon'],
   'mermaid/flowchart.mmd → drawio': ['edge hidden', 'node kind storage→action'],
   'mermaid/mindmap.mmd → drawio': ['node kind topic→action'],
-  'mermaid/state.mmd → drawio': ['description', 'edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
+  'mermaid/state.mmd → drawio': ['edge kind noteLink→dependency', 'node kind choice→relationship', 'node kind final→attribute', 'node kind fork→rectangle', 'node kind initial→attribute', 'node kind state→action'],
   // A line from a note is a note link to PlantUML; draw.io calls it a dashed dependency.
   'drawio/compressed.drawio → puml': ['edge kind dependency→noteLink', 'node kind action→rectangle', 'node kind attribute→usecase', 'node kind relationship→hexagon'],
   'drawio/compressed.drawio → mermaid': ['node kind actor→rectangle', 'node kind label→rectangle', 'node kind note→card'],
@@ -127,6 +123,11 @@ describe('conversion round trips', () => {
           continue;
         }
         expect(result.source, key).not.toBe('');
+        if (diagram.special && target === 'drawio') {
+          // A drawing, not a sequence/Gantt/timing model: checked in 'ordered diagrams → draw.io' below.
+          roundTrip(diagram, layout, target, scene);
+          continue;
+        }
         const { back } = roundTrip(diagram, layout, target, scene);
         expect(differences(diagram, back, result.ids), key).toEqual(LOSSES[key] ?? []);
 
@@ -313,9 +314,79 @@ describe('draw.io output', () => {
     expect(cell.attrs.parent).toBe(pkg.id);
   });
 
-  it('refuses ordered diagrams with a warning', () => {
-    const result = convert(read('sequence.puml'), emptyLayout(), 'drawio');
-    expect(result.source).toBe('');
-    expect(result.warnings[0]!.message).toMatch(/Sequence diagrams can't be converted to draw\.io yet/);
+  it('warns that an ordered diagram becomes a drawing', () => {
+    for (const name of ['sequence.puml', 'gantt.puml', 'timing.puml']) {
+      const result = convert(read(name), emptyLayout(), 'drawio');
+      expect(result.source, name).not.toBe('');
+      expect(result.warnings[0]!.message, name).toMatch(/written as a drawing/);
+    }
+  });
+});
+
+/**
+ * Sequence, Gantt and timing → draw.io: a drawing of our render that reads
+ * back as a plain graph. Participants, tasks and signals are boxes under
+ * their own ids with their names; messages and dependencies are lines
+ * between the right boxes with their labels.
+ */
+describe('ordered diagrams → draw.io', () => {
+  const graphOf = async (name: string) => {
+    const diagram = read(name);
+    const { layout, scene } = await prepared(diagram);
+    const { result, back } = roundTrip(diagram, layout, 'drawio', scene);
+    expect(back.special).toBeUndefined();
+    return { diagram, scene, result, back, node: (id: string) => back.nodes.find((n) => n.id === result.ids.nodes[id]) };
+  };
+
+  for (const name of ['sequence.puml', 'mermaid/sequence.mmd']) {
+    it(`${name}: participants are boxes at the top, messages lines between their lifelines at their rows`, async () => {
+      const { diagram, scene, result, back, node } = await graphOf(name);
+      const model = diagram.special!;
+      if (model.type !== 'sequence' || scene.kind !== 'sequence') throw new Error('not a sequence');
+      for (const p of model.participants) expect(node(p.id)?.label, p.id).toBe(p.label);
+      // Heads sit where the scene put them.
+      for (const h of scene.heads) {
+        const box = node(h.node.id)!.sourceBox!;
+        expect(Math.abs(box.x + box.w / 2 - h.anchor.cx), h.node.id).toBeLessThanOrEqual(1);
+      }
+      const lifelineOf = new Map<string, string>(); // cell id → participant
+      for (const p of model.participants) lifelineOf.set(`${p.id}-lifeline`, p.id);
+      const messages = model.events.filter((e) => e.type === 'message');
+      for (const m of messages) {
+        const e = back.edges.find((x) => x.id === result.ids.edges[m.id]);
+        expect(e, m.id).toBeDefined();
+        if (m.label) expect(e!.label, m.id).toContain(m.label);
+        // An end on a lifeline belongs to the right participant (bars and gates are other cells).
+        if (lifelineOf.has(e!.from)) expect(lifelineOf.get(e!.from), m.id).toBe(m.from);
+        if (lifelineOf.has(e!.to)) expect(lifelineOf.get(e!.to), m.id).toBe(m.to);
+      }
+      // Notes and fragments are in the file.
+      const notes = model.events.filter((e) => e.type === 'note').length;
+      expect(back.nodes.filter((n) => n.kind === 'note').length).toBe(notes);
+      expect(result.source.match(/shape=umlFrame/g)?.length ?? 0).toBe(scene.groups.length + scene.refs.length);
+    });
+  }
+
+  for (const name of ['gantt.puml', 'mermaid/gantt.mmd']) {
+    it(`${name}: tasks are named bars, milestones diamonds, dependencies lines`, async () => {
+      const { diagram, back, node } = await graphOf(name);
+      const model = diagram.special!;
+      if (model.type !== 'gantt') throw new Error('not a gantt');
+      for (const t of model.tasks) {
+        const n = node(t.id);
+        expect(n?.label, t.id).toBe(t.name);
+        expect(n?.kind, t.id).toBe(t.milestone ? 'relationship' : 'action');
+      }
+      const deps = model.tasks.flatMap((t) => t.after.map((a) => `${node(a)!.id}>${node(t.id)!.id}`)).sort();
+      expect(back.edges.map((e) => `${e.from}>${e.to}`).sort()).toEqual(deps);
+    });
+  }
+
+  it('timing.puml: signals are lanes, messages lines between them', async () => {
+    const { diagram, back, node } = await graphOf('timing.puml');
+    const model = diagram.special!;
+    if (model.type !== 'timing') throw new Error('not timing');
+    for (const s of model.signals) expect(node(s.id)?.label, s.id).toBe(s.label);
+    expect(back.edges.map((e) => [e.from, e.to, e.label])).toEqual(model.messages.map((m) => [node(m.from)!.id, node(m.to)!.id, m.label]));
   });
 });

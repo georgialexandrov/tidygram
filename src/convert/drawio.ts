@@ -1,12 +1,13 @@
 import type { LayoutFile, Point } from '../layout/layout-file.ts';
 import { parseDrawio } from '../model/drawio.ts';
-import type { ArrowHead, DNode, Diagram, NodeKind, ParseWarning } from '../model/types.ts';
+import type { ArrowHead, ClassKind, DNode, Diagram, NodeKind, ParseWarning } from '../model/types.ts';
 import type { AnyScene } from '../scene/any.ts';
 import { containerBoxes, nodeBox, type Box, type Positions } from '../scene/containers.ts';
 import { FREE_SIZE, containerPad, nodeShape } from '../scene/shapes.ts';
 import { themeOf, type Theme } from '../scene/theme.ts';
 import { RING_ASPECT, type TemplateScene } from '../scene/template.ts';
 import { KindLosses, warn, type ConvertResult, type IdMap } from './common.ts';
+import { orderedToDrawio } from './drawio-ordered.ts';
 
 /**
  * Diagram → draw.io (uncompressed `<mxfile>`). Unlike PlantUML and Mermaid,
@@ -21,11 +22,7 @@ import { KindLosses, warn, type ConvertResult, type IdMap } from './common.ts';
  * the root cells.
  */
 export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene): ConvertResult {
-  const none: IdMap = { nodes: {}, edges: {} };
-  if (diagram.special) {
-    const what = { sequence: 'Sequence', gantt: 'Gantt', timing: 'Timing' }[diagram.special.type];
-    return { source: '', layout: { version: 1, nodes: {}, edges: {} }, warnings: [warn(`${what} diagrams can't be converted to draw.io yet`)], ids: none };
-  }
+  if (diagram.special) return orderedToDrawio(diagram.special, layout, scene);
   const losses = new KindLosses();
   const warnings: ParseWarning[] = [];
   const geo = geometry(diagram, layout, scene && scene.kind === 'graph' ? scene : undefined);
@@ -94,8 +91,6 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     const id = cellId.get(`n:${n.id}`)!;
     if (n.kind === 'class') {
       cells.push(...tableCells(n, id, parent, box, origin, g.header, fresh));
-      if (n.classKind && n.classKind !== 'entity') losses.add(`${n.classKind} class written as a table`);
-      if (n.stereotype) losses.add('stereotype');
       continue;
     }
     let style = KIND_STYLE[n.kind];
@@ -107,10 +102,9 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     }
     if (n.key) style += 'fontStyle=4;';
     if (n.derived) style += 'dashed=1;';
-    if (n.stereotype && n.stereotype !== 'boxless') losses.add('stereotype');
-    if (n.description?.length || n.technology) losses.add('description lines');
     if (n.attachedTo) losses.add('note attachment');
-    cells.push(`<mxCell id="${attr(id)}" value="${attr(html(n.label))}" style="${style}html=1;" vertex="1" parent="${attr(parent)}">${geometryXml(box, origin)}</mxCell>`);
+    const folded = foldLabel(n);
+    cells.push(`<mxCell id="${attr(id)}" value="${attr(folded.value)}" style="${style}html=1;${folded.style}" vertex="1" parent="${attr(parent)}">${geometryXml(box, origin)}</mxCell>`);
   }
 
   // ---- edges: absolute waypoints under the default layer ----
@@ -138,8 +132,13 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     if (e.kind === 'noteLink') losses.add('note link read back as a dashed line');
     // Pin the ends where the router attached them, so draw.io's orthogonal router draws the same path.
     const points = route?.points;
+    // Hand-chosen ends (sidecar `from`/`to`) read back as fixed; the router's own are flagged `pumlAuto*`.
+    const chosen = layout.edges[e.id];
     if (points && points.length >= 2) {
-      style += pin('exit', points[0]!, fromBox) + pin('entry', points[points.length - 1]!, toBox);
+      style += pin('exit', points[0]!, fromBox) + (chosen?.from ? '' : 'pumlAutoExit=1;') + pin('entry', points[points.length - 1]!, toBox) + (chosen?.to ? '' : 'pumlAutoEntry=1;');
+    } else {
+      if (chosen?.from) style += pin('exit', [fromBox.x + chosen.from.x * fromBox.w, fromBox.y + chosen.from.y * fromBox.h], fromBox);
+      if (chosen?.to) style += pin('entry', [toBox.x + chosen.to.x * toBox.w, toBox.y + chosen.to.y * toBox.h], toBox);
     }
     const bends = points && points.length > 2 ? points.slice(1, -1) : (route?.via ?? []);
     const array = bends.length ? `<Array as="points">${bends.map(([x, y]) => `<mxPoint x="${r(x)}" y="${r(y)}" />`).join('')}</Array>` : '';
@@ -157,21 +156,7 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     }
   }
 
-  const source = [
-    '<mxfile host="puml-layout">',
-    '  <diagram id="page-1" name="Page-1">',
-    '    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0">',
-    '      <root>',
-    '        <mxCell id="0" />',
-    ...backdrop.map((c) => `        ${c}`),
-    '        <mxCell id="1" parent="0" />',
-    ...cells.map((c) => `        ${c}`),
-    '      </root>',
-    '    </mxGraphModel>',
-    '  </diagram>',
-    '</mxfile>',
-    '',
-  ].join('\n');
+  const source = mxfile(cells, { backdrop });
 
   // Map only what reads back: an id that went missing is a bug worth a warning, not a silent map entry.
   const parsed = parseDrawio(source).diagram;
@@ -187,7 +172,11 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
     if (id && presentEdges.has(id)) ids.edges[e.id] = id;
   }
 
-  // The file carries the layout; the sidecar keeps only the view. Sizes are baked into the geometry.
+  return { source, layout: viewOnly(layout, warnings), warnings: [...warnings, ...losses.warnings('draw.io')], ids };
+}
+
+/** The file carries the layout; the sidecar keeps only the view. Sizes are baked into the geometry. */
+export function viewOnly(layout: LayoutFile, warnings: ParseWarning[]): LayoutFile {
   const view = layout.view ? { ...layout.view } : undefined;
   if (view && (view.scale || view.text || view.icons)) {
     warnings.push(warn('Scale settings are baked into the draw.io geometry and dropped from the sidecar'));
@@ -197,7 +186,27 @@ export function toDrawio(diagram: Diagram, layout: LayoutFile, scene?: AnyScene)
   }
   const next: LayoutFile = { version: 1, nodes: {}, edges: {} };
   if (view && Object.keys(view).length) next.view = view;
-  return { source, layout: next, warnings: [...warnings, ...losses.warnings('draw.io')], ids };
+  return next;
+}
+
+/** One uncompressed page; `backdrop` cells go before the default layer (drawn under it), `background` is the page colour. */
+export function mxfile(cells: string[], options: { backdrop?: string[]; background?: string } = {}): string {
+  const background = options.background ? ` background="${attr(options.background)}"` : '';
+  return [
+    '<mxfile host="puml-layout">',
+    '  <diagram id="page-1" name="Page-1">',
+    `    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0"${background}>`,
+    '      <root>',
+    '        <mxCell id="0" />',
+    ...(options.backdrop ?? []).map((c) => `        ${c}`),
+    '        <mxCell id="1" parent="0" />',
+    ...cells.map((c) => `        ${c}`),
+    '      </root>',
+    '    </mxGraphModel>',
+    '  </diagram>',
+    '</mxfile>',
+    '',
+  ].join('\n');
 }
 
 // ---- template backdrop ---------------------------------------------------------------------------
@@ -240,7 +249,7 @@ function templateCells(t: TemplateScene, theme: Theme, fresh: (base: string) => 
 const BELOW = 'verticalLabelPosition=bottom;verticalAlign=top;outlineConnect=0;';
 
 /** Kind → draw.io style, chosen so `parseDrawio` reads the kind back where draw.io has the shape. */
-const KIND_STYLE: Partial<Record<NodeKind, string>> = {
+export const KIND_STYLE: Partial<Record<NodeKind, string>> = {
   rectangle: 'rounded=0;',
   action: 'rounded=1;',
   attribute: 'ellipse;',
@@ -323,6 +332,34 @@ function pin(which: 'exit' | 'entry', [x, y]: Point, box: Box): string {
 }
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
+/** The «kind» line draw.io's UML shapes put above a class name; plain classes, abstract ones (italic) and tables have none. */
+const CLASS_KIND_LINE: Partial<Record<ClassKind, string>> = {
+  interface: 'interface', enum: 'enum', annotation: 'annotation', struct: 'struct', protocol: 'protocol', exception: 'exception', record: 'record',
+};
+
+/**
+ * A node's label as draw.io shows it: «kind» and «stereotype» lines above
+ * the name, `[technology]` and description lines under it, both smaller.
+ * draw.io keeps unknown style keys, so `pumlHead`/`pumlTail` (how many
+ * lines aren't the name), `pumlStereotype`, `pumlTechnology` and
+ * `pumlClassKind` let `parseDrawio` take the label apart again.
+ */
+export function foldLabel(n: DNode, kindLine?: string): { value: string; style: string } {
+  const small = (t: string) => `<font style="font-size:10px">${html(t)}</font>`;
+  const stereotype = n.stereotype && n.stereotype !== 'boxless' ? n.stereotype : undefined;
+  const head = [kindLine, stereotype].filter((t): t is string => !!t).map((t) => `«${t}»`);
+  // draw.io drops empty lines in labels, so blank description lines don't travel.
+  const tail = [...(n.technology ? [`[${n.technology}]`] : []), ...(n.description ?? []).filter((l) => l.trim())];
+  const enc = (t: string) => encodeURIComponent(t);
+  let style = '';
+  if (head.length) style += `pumlHead=${head.length};`;
+  if (tail.length) style += `pumlTail=${tail.length};`;
+  if (stereotype) style += `pumlStereotype=${enc(stereotype)};`;
+  if (n.technology) style += `pumlTechnology=${enc(n.technology)};`;
+  if (n.kind === 'class' && n.classKind && n.classKind !== 'entity') style += `pumlClassKind=${n.classKind};`;
+  return { value: [...head.map(small), html(n.label), ...tail.map(small)].join('<br>'), style };
+}
+
 /**
  * A class box as draw.io's UML class: a stack-layout swimlane (header =
  * name) with one text row per member and a line between compartments.
@@ -335,8 +372,11 @@ function tableCells(n: DNode, id: string, parent: string, box: Box, origin: Box 
   const separators = sections.length - 1;
   const rows = Math.max(1, sections.reduce((s, c) => s + Math.max(c.length, 0), 0));
   const rowH = Math.max(8, (box.h - head - separators * 8) / rows);
+  const folded = foldLabel(n, n.classKind ? CLASS_KIND_LINE[n.classKind] : undefined);
+  // UML writes abstract names in italics.
+  const font = n.classKind === 'abstract' ? 3 : 1;
   const cells = [
-    `<mxCell id="${attr(id)}" value="${attr(html(n.label))}" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=${head};horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;" vertex="1" parent="${attr(parent)}"><mxGeometry x="${r(box.x - (origin?.x ?? 0))}" y="${r(box.y - (origin?.y ?? 0))}" width="${r(box.w)}" height="${r(box.h)}" as="geometry" /></mxCell>`,
+    `<mxCell id="${attr(id)}" value="${attr(folded.value)}" style="swimlane;fontStyle=${font};align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=${head};horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;${folded.style}" vertex="1" parent="${attr(parent)}"><mxGeometry x="${r(box.x - (origin?.x ?? 0))}" y="${r(box.y - (origin?.y ?? 0))}" width="${r(box.w)}" height="${r(box.h)}" as="geometry" /></mxCell>`,
   ];
   let y = head;
   const row = (text: string) => {
@@ -392,9 +432,9 @@ function geometry(diagram: Diagram, layout: LayoutFile, scene: Extract<AnyScene,
 
 // ---- text --------------------------------------------------------------------------------------
 
-const r = (v: number) => Math.round(v * 100) / 100;
+export const r = (v: number) => Math.round(v * 100) / 100;
 /** A label as draw.io HTML (`html=1`): escaped, line breaks as `<br>`. */
-const html = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+export const html = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 /** An XML attribute value. */
-const attr = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\n/g, '&#10;');
+export const attr = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\n/g, '&#10;');
 

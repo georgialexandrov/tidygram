@@ -236,7 +236,9 @@ function themedShape(node: DNode, theme: Theme): NodeShape {
       const w = Math.ceil(Math.max(figure.w + 8 * k, text.width + 8 * k, (stereo?.width ?? 0) + 8 * k));
       const h = Math.ceil(stereoH + figure.h + 6 * k + text.height);
       const figureCy = -h / 2 + stereoH + figure.h / 2;
-      return { w, h, text, stereo, icon: figure, anchor: { dx: 0, dy: figureCy, w: figure.w, h: figure.h, shape: 'rect' } };
+      // An avatar is a disc: lines end on the circle. Stick figures and system tiles are met at their box.
+      const round = figure.style === 'avatar' && node.stereotype !== 'system';
+      return { w, h, text, stereo, icon: figure, anchor: { dx: 0, dy: figureCy, w: figure.w, h: figure.h, shape: round ? 'ellipse' : 'rect' } };
     }
     case 'usecase': {
       const text = measure(node.label, theme.size.node, strong);

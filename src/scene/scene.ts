@@ -1,10 +1,11 @@
-import type { LayoutFile, Point } from '../layout/layout-file.ts';
+import type { EndAttach, LayoutFile, Point } from '../layout/layout-file.ts';
 import type { ArrowHead, DEdge, DNode, Diagram, EdgeKind } from '../model/types.ts';
 import type { Avoid } from './avoid.ts';
 import { containerBoxes, doorFor, facingSide, nodeBox, overlaps, titleBox, wallsFor, type Box, type Door, type Positions, type Side } from './containers.ts';
 import { clipEnd, clipStart, pathLength, pointAt, simplify, type AnchorShape } from './geometry.ts';
 import { borderCrossings, overlapArea, pathHitsBox } from './quality.ts';
-import { planPorts } from './ports.ts';
+import { planPorts, settleEnd, slideOnNode, untangle, type EdgePorts, type Port } from './ports.ts';
+import { attachOutline, outward } from './attach.ts';
 import { placeEndLabel, placeMidLabel, type LabelObstacles } from './labels.ts';
 import { containerPad, nodeShape, type NodeShape } from './shapes.ts';
 import { measureText, type TextBlock } from './measure.ts';
@@ -31,6 +32,8 @@ export interface SceneContainer {
   depth: number;
   /** The title's text box: an obstacle for lines and labels. */
   title?: Box;
+  /** How far the title was moved right from its usual spot, off the way of a line dropping onto an element under it. */
+  titleShift?: number;
 }
 
 export interface EndLabel {
@@ -54,6 +57,8 @@ export interface SceneEdge {
   toLabel?: EndLabel;
   /** With an architecture template on: why this line breaks the template's dependency rule. */
   violation?: string;
+  /** Ends whose attachment was chosen by hand (`EdgeLayout.from` / `to`); absent when neither was. */
+  fixedEnds?: { from?: boolean; to?: boolean };
 }
 
 export interface Scene {
@@ -153,6 +158,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const fence = template ? templateFence(template, byId) : undefined;
   /** What lines route round: the containers, plus a template's core (see `templateFence`). */
   const fences: SceneContainer[] = fence ? [...containers, fence.container] : containers;
+  shiftTitles(containers, nodes, diagram, layout, theme);
   const containerOf = new Map(containers.map((c) => [c.id, c]));
   const parentOf = new Map<string, string | undefined>([...diagram.nodes.map((n) => [n.id, n.parent] as const), ...diagram.containers.map((c) => [c.id, c.parent] as const)]);
   /** True when `id` (a node or container) sits somewhere inside `container`. */
@@ -191,7 +197,31 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   };
   const fromPoints = new Map(visible.map((e) => [e.id, borderPoint(e.from, e.to)]));
   const toPoints = new Map(visible.map((e) => [e.id, borderPoint(e.to, e.from)]));
-  const ports = planPorts(visible, (id) => !!layout.edges[id]?.via?.length, { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer }, diagram.direction === 'LR');
+  // Hand-chosen ends win over every automatic port (and over a straight pair, which needs both ends);
+  // the planner takes them as given and spreads the other ends round them.
+  const fixed = new Map<string, EdgePorts>();
+  for (const e of visible) {
+    const user = layout.edges[e.id];
+    if (!user?.from && !user?.to) continue;
+    const p: EdgePorts = {};
+    for (const [key, id, points] of [['from', e.from, fromPoints], ['to', e.to, toPoints]] as const) {
+      const at = user[key];
+      if (!at) continue;
+      const n = byId.get(id);
+      const c = containerBox.get(id);
+      // With an arrowhead (or diamond, crow's foot) there, the straight stretch is at least as long as the head plus a bit.
+      const head = key === 'to' ? e.head : e.tail;
+      if (n) p[key] = userPort(n, at, head === 'none' ? 0 : 18 * Math.sqrt(theme.scale));
+      else if (c) points.set(e.id, attachOutline({ cx: c.x + c.w / 2, cy: c.y + c.h / 2, w: c.w, h: c.h, dx: 0, dy: 0, shape: 'rect' }, at));
+    }
+    fixed.set(e.id, p);
+  }
+  const ports = planPorts(
+    visible,
+    (id) => !!layout.edges[id]?.via?.length,
+    { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, via: (id) => layout.edges[id]?.via, fixed, scale: theme.scale },
+    diagram.direction === 'LR',
+  );
 
   /**
    * Walls and titles: every container border is an obstacle with a door
@@ -284,63 +314,126 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
     near = { x: x0, y: y0, w: Math.max(...ends.map((b) => b.x + b.w)) + 120 - x0, h: Math.max(...ends.map((b) => b.y + b.h)) + 120 - y0 };
   }
   const obstacles = !routed.length ? [] : containerObstacles(routed, near);
-  const requests = routed.map((e) => ({ id: e.id, from: e.from, to: e.to, via: layout.edges[e.id]?.via, fromPoint: fromPoints.get(e.id) ?? ports.get(e.id)?.from?.route, toPoint: toPoints.get(e.id) ?? ports.get(e.id)?.to?.route }));
-  const routes = routeEdges(
-    avoid,
-    routeShapes,
-    requests,
-    obstacles,
-  );
-  // Two kinds of failure: libavoid draws a straight line through everything when no route exists
-  // (a door it can't reach), and a line can slip into a container through one line's door and out
-  // through another's. Route those again on their own, so only their own doors are open, opened to the
-  // whole side.
-  if (obstacles.length) {
-    const nodeBoxes = new Map(nodes.map((n) => [n.node.id, n.box]));
-    /** What's wrong with a route: obstacles it runs through, plus containers it slips in and out of. */
-    const faults = (e: DEdge, pts: Point[], walls: readonly Box[]) =>
-      walls.filter((o) => pathHitsBox(pts, o, 0.5)).length +
-      2 * nodes.filter((n) => n.node.id !== e.from && n.node.id !== e.to && pathHitsBox(pts, nodeBoxes.get(n.node.id)!, 2)).length +
-      fences.filter((c) => c.kind !== 'swimlane' && e.from !== c.id && e.to !== c.id && borderCrossings(pts, c.box) > (within(e.from, c.id) !== within(e.to, c.id) ? 1 : 0)).length;
-    const stuck = routed.filter((e) => routes.get(e.id) && faults(e, routes.get(e.id)!, obstacles) > 0);
-    if (stuck.length) {
-      const ids = new Set(stuck.map((e) => e.id));
-      const walls = containerObstacles(stuck, near, true);
-      const again = routeEdges(avoid, routeShapes, requests.filter((r) => ids.has(r.id)), walls);
-      const choose = (e: DEdge, candidates: [Point[] | undefined, readonly Box[]][]) => {
-        let best = routes.get(e.id)!;
-        let worst = faults(e, best, obstacles);
-        for (const [pts, against] of candidates) {
-          const n = pts ? faults(e, pts, against) : Infinity;
-          if (pts && n < worst) [best, worst] = [pts, n];
+  /**
+   * A line that ends on a container's border is routed to a point just off
+   * it (outside, or inside when the other end is in the container) and drawn
+   * on to the border, so it meets the border square instead of running
+   * along it into the end point.
+   */
+  const stubs = new Map<string, Port>();
+  for (const e of routed) {
+    for (const [key, id, other, p] of [['from', e.from, e.to, fromPoints.get(e.id)], ['to', e.to, e.from, toPoints.get(e.id)]] as const) {
+      const b = containerBox.get(id);
+      if (!p || !b) continue;
+      const side: Side = Math.abs(p[1] - b.y) < 0.5 ? 'top' : Math.abs(p[1] - b.y - b.h) < 0.5 ? 'bottom' : Math.abs(p[0] - b.x) < 0.5 ? 'left' : 'right';
+      stubs.set(`${e.id}:${key}`, { outline: p, route: outward(p, side, (within(other, id) ? -1 : 1) * (ROUTING.shapeBuffer + 1)) });
+    }
+  }
+  /** Where a border end may slide to: along its side, off the corners and the title. */
+  const slideOnBorder = (id: string, p: Port) => {
+    const c = containerOf.get(id);
+    if (!c) return undefined;
+    const b = c.box;
+    const vertical = Math.abs(p.route[0] - p.outline[0]) < 0.5;
+    return (at: number): Point | undefined => {
+      const [lo, hi] = vertical ? [b.x + 12, b.x + b.w - 12] : [b.y + 12, b.y + b.h - 12];
+      if (at < lo || at > hi) return undefined;
+      if (vertical && c.title && p.outline[1] === b.y && at > c.title.x - 8 && at < c.title.x + c.title.w + 8) return undefined;
+      return vertical ? [at, p.outline[1]] : [p.outline[0], at];
+    };
+  };
+  /** Routes `lines` with the current ports, then routes the ones that went wrong again (see below). */
+  const routeLines = (lines: DEdge[]): Map<string, Point[]> => {
+    const requests = (lines: DEdge[]) =>
+      lines.map((e) => ({
+        id: e.id,
+        from: e.from,
+        to: e.to,
+        via: layout.edges[e.id]?.via,
+        fromPoint: stubs.get(`${e.id}:from`)?.route ?? ports.get(e.id)?.from?.route,
+        toPoint: stubs.get(`${e.id}:to`)?.route ?? ports.get(e.id)?.to?.route,
+      }));
+    const routes = routeEdges(avoid, routeShapes, requests(lines), obstacles);
+    // Two kinds of failure: libavoid draws a straight line through everything when no route exists
+    // (a door it can't reach), and a line can slip into a container through one line's door and out
+    // through another's. Route those again on their own, so only their own doors are open, opened to the
+    // whole side.
+    if (obstacles.length) {
+      const nodeBoxes = new Map(nodes.map((n) => [n.node.id, n.box]));
+      /** What's wrong with a route: obstacles it runs through, plus containers it slips in and out of. */
+      const faults = (e: DEdge, pts: Point[], walls: readonly Box[]) =>
+        // A slanted segment is libavoid giving up (a straight line through everything): worse than any detour.
+        10 * pts.slice(1).filter((p, i) => Math.abs(p[0] - pts[i]![0]) > 0.5 && Math.abs(p[1] - pts[i]![1]) > 0.5).length +
+        walls.filter((o) => pathHitsBox(pts, o, 0.5)).length +
+        2 * nodes.filter((n) => n.node.id !== e.from && n.node.id !== e.to && pathHitsBox(pts, nodeBoxes.get(n.node.id)!, 2)).length +
+        fences.filter((c) => c.kind !== 'swimlane' && e.from !== c.id && e.to !== c.id && borderCrossings(pts, c.box) > (within(e.from, c.id) !== within(e.to, c.id) ? 1 : 0)).length;
+      const stuck = lines.filter((e) => routes.get(e.id) && faults(e, routes.get(e.id)!, obstacles) > 0);
+      if (stuck.length) {
+        const ids = new Set(stuck.map((e) => e.id));
+        const walls = containerObstacles(stuck, near, true);
+        const again = routeEdges(avoid, routeShapes, requests(stuck), walls);
+        const choose = (e: DEdge, candidates: [Point[] | undefined, readonly Box[]][]) => {
+          let best = routes.get(e.id)!;
+          let worst = faults(e, best, obstacles);
+          for (const [pts, against] of candidates) {
+            const n = pts ? faults(e, pts, against) : Infinity;
+            if (pts && n < worst) [best, worst] = [pts, n];
+          }
+          routes.set(e.id, best);
+          return worst;
+        };
+        const still = stuck.filter((e) => choose(e, [[again.get(e.id), walls]]) > 0);
+        // Last resort, the router as it was before walls: round the boxes, through the containers.
+        if (still.length) {
+          const bare = routeEdges(avoid, routeShapes, requests(still), []);
+          for (const e of still) choose(e, [[bare.get(e.id), []]]);
         }
-        routes.set(e.id, best);
-        return worst;
-      };
-      const still = stuck.filter((e) => choose(e, [[again.get(e.id), walls]]) > 0);
-      // Last resort, the router as it was before walls: round the boxes, through the containers.
-      if (still.length) {
-        const bare = routeEdges(avoid, routeShapes, requests.filter((r) => still.some((e) => e.id === r.id)), []);
-        for (const e of still) choose(e, [[bare.get(e.id), []]]);
       }
+    }
+    return routes;
+  };
+  /** A line as drawn: the route with its ports' outline points, or clipped to the end shapes. */
+  const drawn = (e: DEdge, routes: Map<string, Point[]>): Point[] => {
+    const from = byId.get(e.from);
+    const to = byId.get(e.to);
+    let points = routes.get(e.id) ?? [centreOf(e.from), centreOf(e.to)];
+    const port = ports.get(e.id);
+    if (port?.straight) points = [port.from!.outline, port.to!.outline];
+    else if (routes.has(e.id) && points.length) {
+      const user = layout.edges[e.id];
+      const fromPort = port?.from ?? stubs.get(`${e.id}:from`);
+      const toPort = port?.to ?? stubs.get(`${e.id}:to`);
+      const slide = (id: string, p: Port, keep: boolean) => (keep ? undefined : byId.has(id) ? slideOnNode(byId.get(id)!, p) : slideOnBorder(id, p));
+      if (fromPort) {
+        const { lead, skip } = settleEnd(fromPort, points, slide(e.from, fromPort, !!user?.from));
+        points = [...lead, ...points.slice(skip)];
+      }
+      if (toPort) {
+        const { lead, skip } = settleEnd(toPort, [...points].reverse(), slide(e.to, toPort, !!user?.to));
+        points = [...points.slice(0, points.length - skip), ...lead.reverse()];
+      }
+    }
+    if (from && !port?.from) points = clipStart(points, from.anchor);
+    if (to && !port?.to) points = clipEnd(points, to.anchor);
+    return simplify(points);
+  };
+  let routes = routeLines(routed);
+  // Lines that ran into one spot get spots of their own, and everything is routed again so nudging sees the
+  // new ends. Full builds only: while dragging, the dragged lines keep the plain route until release.
+  if (!reused.size && routed.length > 1) {
+    const ctx = { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, scale: theme.scale };
+    // Twice at most: the second routing can bring two other ends together.
+    for (let round = 0; round < 2; round++) {
+      const changed = untangle(routed.map((e) => ({ e, points: drawn(e, routes) })), ports, ctx);
+      if (!changed.size) break;
+      routes = routeLines(routed);
     }
   }
 
   const edges: SceneEdge[] = visible.map((e) => {
     const kept = reused.get(e.id);
     if (kept) return kept;
-    const from = byId.get(e.from);
-    const to = byId.get(e.to);
-    let points = routes.get(e.id) ?? [centreOf(e.from), centreOf(e.to)];
-    const port = ports.get(e.id);
-    if (port?.straight) points = [port.from!.outline, port.to!.outline];
-    else if (routes.has(e.id)) {
-      if (port?.from) points = [port.from.outline, ...points];
-      if (port?.to) points = [...points, port.to.outline];
-    }
-    if (from && !port?.from) points = clipStart(points, from.anchor);
-    if (to && !port?.to) points = clipEnd(points, to.anchor);
-    points = simplify(points);
+    const points = drawn(e, routes);
     return {
       edge: e,
       kind: e.kind,
@@ -349,6 +442,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
       tail: e.tail,
       dashed: e.dashed,
       via: layout.edges[e.id]?.via ?? [],
+      ...(layout.edges[e.id]?.from || layout.edges[e.id]?.to ? { fixedEnds: { from: !!layout.edges[e.id]!.from, to: !!layout.edges[e.id]!.to } } : {}),
     };
   });
   placeLabels(edges, reused, nodes, containers, layout, theme);
@@ -373,6 +467,63 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const x1 = Math.max(...all.map((b) => b.x + b.w));
   const y1 = Math.max(...all.map((b) => b.y + b.h));
   return { kind: 'graph', theme, nodes, containers, edges, bounds: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, template };
+}
+
+/**
+ * A hand-chosen end as a port: on the outline at the stored fraction, routed
+ * from straight out from there, just past the node's clearance (like the
+ * automatic ports), so the line comes in square to the chosen side.
+ */
+function userPort(n: SceneNode, at: EndAttach, straight: number): Port {
+  const outline = attachOutline(n.anchor, at);
+  const b = n.box;
+  // Past the clearance, and `straight` clear of the outline (the box can sit further out than the figure).
+  const gap = at.side === 'top' ? outline[1] - b.y : at.side === 'bottom' ? b.y + b.h - outline[1] : at.side === 'left' ? outline[0] - b.x : b.x + b.w - outline[0];
+  const d = Math.max(ROUTING.shapeBuffer + 1, straight - gap);
+  const route: Point = at.side === 'top' ? [outline[0], b.y - d] : at.side === 'bottom' ? [outline[0], b.y + b.h + d] : at.side === 'left' ? [b.x - d, outline[1]] : [b.x + b.w + d, outline[1]];
+  // A figure reaching past its box (shouldn't happen): step out from the outline instead.
+  const ahead = at.side === 'top' ? route[1] < outline[1] : at.side === 'bottom' ? route[1] > outline[1] : at.side === 'left' ? route[0] < outline[0] : route[0] > outline[0];
+  return { outline, route: ahead ? route : outward(outline, at.side, d) };
+}
+
+/**
+ * A left-aligned title sitting right above an element that a line reaches
+ * from above (an nwdiag host under its group's name, dropping from the
+ * network bar) would make that line detour round the title. The title moves
+ * right, past such elements, to the first stretch of the top border no line
+ * comes through, if there is one.
+ */
+function shiftTitles(containers: SceneContainer[], nodes: SceneNode[], diagram: Diagram, layout: LayoutFile, theme: Theme) {
+  if (theme.containerTitle !== 'caps') return;
+  const byId = new Map(nodes.map((n) => [n.node.id, n]));
+  const parentOf = new Map<string, string | undefined>([...diagram.nodes.map((n) => [n.id, n.parent] as const), ...diagram.containers.map((c) => [c.id, c.parent] as const)]);
+  const inside = (id: string, c: string) => {
+    for (let p = parentOf.get(id); p; p = parentOf.get(p)) if (p === c) return true;
+    return false;
+  };
+  const centreY = (id: string) => byId.get(id)?.anchor.cy ?? containers.find((c) => c.id === id)?.box.y;
+  for (const c of containers) {
+    const t = c.title;
+    if (!t || c.kind === 'state' || c.kind === 'swimlane') continue;
+    // Spots on the top border lines come through: elements inside, reached from something above the container.
+    const doors: [number, number][] = [];
+    for (const e of diagram.edges) {
+      if (e.hidden || layout.edges[e.id]?.via?.length) continue;
+      for (const [a, b] of [[e.from, e.to], [e.to, e.from]] as const) {
+        const n = byId.get(a);
+        const oy = centreY(b);
+        if (!n || !inside(a, c.id) || inside(b, c.id) || oy === undefined || oy >= c.box.y) continue;
+        doors.push([n.box.x + n.box.w / 2 - 12, n.box.x + n.box.w / 2 + 12]);
+      }
+    }
+    const clear = (x: number) => !doors.some(([lo, hi]) => lo < x + t.w && hi > x);
+    if (!doors.length || clear(t.x)) continue;
+    const starts = doors.map(([, hi]) => hi + 4).filter((x) => x > t.x).sort((a, b) => a - b);
+    const x = starts.find((x) => clear(x) && x + t.w <= c.box.x + c.box.w - 8);
+    if (x === undefined) continue;
+    c.titleShift = x - t.x;
+    c.title = { ...t, x };
+  }
 }
 
 /**

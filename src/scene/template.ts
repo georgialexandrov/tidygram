@@ -50,7 +50,11 @@ export interface TemplateRing {
   id: string;
   /** Outer radius (vertical; the horizontal one is `RING_ASPECT` times it); the inner one is the previous ring's outer radius (0 for the core). */
   r: number;
+  /** Vertical radius of the lower half (≤ `r`): a ring whose members sit high doesn't hang empty below them. */
+  rb: number;
   inner: number;
+  /** The previous ring's `rb` (0 for the core). */
+  innerB: number;
   fill: string;
   title: TemplateTitle;
 }
@@ -272,6 +276,13 @@ export function hexGeometry(layers: LayerDef[], members: Map<string, Box[]>, the
 // ---- clean / onion ------------------------------------------------------------------------------
 
 /** Farthest corner of a box from a point, in ring space: the radius a ring around that point needs to hold the box. */
+/** SVG path of a ring's outline: an ellipse whose lower half is `rb` deep instead of `r`. */
+export function ringPath(cx: number, cy: number, r: number, rb: number): string {
+  const rx = r * RING_ASPECT;
+  const n = (v: number) => Math.round(v * 10) / 10;
+  return `M${n(cx - rx)},${n(cy)} A${n(rx)},${n(r)} 0 0 1 ${n(cx + rx)},${n(cy)} A${n(rx)},${n(rb)} 0 0 1 ${n(cx - rx)},${n(cy)} Z`;
+}
+
 export function cornerDistance(box: Box, [cx, cy]: Point): number {
   const dx = Math.max(Math.abs(box.x - cx), Math.abs(box.x + box.w - cx)) / RING_ASPECT;
   const dy = Math.max(Math.abs(box.y - cy), Math.abs(box.y + box.h - cy));
@@ -301,16 +312,27 @@ export function cleanRings(layers: LayerDef[], members: Map<string, Box[]>, them
   const m = templateMetrics(theme);
   const rings: TemplateRing[] = [];
   let r = 0;
+  let rb = 0;
   layers.forEach((l, i) => {
     const boxes = members.get(l.id) ?? [];
     const inner = r;
+    const innerB = rb;
     const reach = boxes.length ? Math.max(...boxes.map((b) => cornerDistance(b, center))) : 0;
     const text = titleBlock(l.label, theme);
     // The title needs room only at the top, over the members below it; elsewhere the padding is enough.
     const under = boxes.filter((b) => Math.abs(b.x + b.w / 2 - center[0]) < text.width / 2 + b.w / 2 + m.pad && b.y < center[1]);
     const titleRoom = under.length ? Math.max(...under.map((b) => center[1] - b.y)) + m.titleHeight + m.pad * 1.5 : 0;
     r = Math.max(inner + m.empty, boxes.length ? Math.max(reach + m.pad, titleRoom) : 0);
-    rings.push({ id: l.id, r, inner, fill: fillAt(theme, layers.length - 1 - i, layers.length), title: { text, x: center[0], y: center[1] - r + m.pad * 0.5, align: 'middle' } });
+    // The lower half only as deep as the members below the centre need (each corner, padded, inside the half-ellipse).
+    rb = innerB + m.empty;
+    for (const b of boxes) {
+      const dy = b.y + b.h + m.pad - center[1];
+      if (dy <= 0) continue;
+      const dx = Math.max(Math.abs(b.x - m.pad - center[0]), Math.abs(b.x + b.w + m.pad - center[0])) / (r * RING_ASPECT);
+      rb = Math.max(rb, dx >= 0.98 ? r : dy / Math.sqrt(1 - dx * dx));
+    }
+    rb = Math.min(r, rb);
+    rings.push({ id: l.id, r, rb, inner, innerB, fill: fillAt(theme, layers.length - 1 - i, layers.length), title: { text, x: center[0], y: center[1] - r + m.pad * 0.5, align: 'middle' } });
   });
   return rings;
 }
@@ -345,7 +367,7 @@ export function buildTemplateScene(diagram: Diagram, template: TemplateSettings,
     scene.center = ringCenter(layers, members);
     scene.rings = cleanRings(layers, members, theme, scene.center);
     const outer = scene.rings.at(-1);
-    if (outer && scene.center) parts.push({ x: scene.center[0] - outer.r * RING_ASPECT, y: scene.center[1] - outer.r, w: outer.r * 2 * RING_ASPECT, h: outer.r * 2 });
+    if (outer && scene.center) parts.push({ x: scene.center[0] - outer.r * RING_ASPECT, y: scene.center[1] - outer.r, w: outer.r * 2 * RING_ASPECT, h: outer.r + outer.rb });
   }
   parts.push(...scene.bands.map((b) => b.box));
   scene.bounds = union(parts) ?? scene.bounds;
@@ -370,8 +392,10 @@ export function regionAt(t: TemplateScene, [x, y]: Point, portBand = 0): string 
   }
   if (t.kind === 'clean') {
     if (!t.center || !t.rings.length) return undefined;
-    const d = Math.hypot((x - t.center[0]) / RING_ASPECT, y - t.center[1]);
-    return (t.rings.find((r) => d < r.r) ?? t.rings.at(-1)!).id;
+    const dx = (x - t.center[0]) / RING_ASPECT;
+    const dy = y - t.center[1];
+    // In units of each ring's radius (the lower half has its own).
+    return (t.rings.find((r) => Math.hypot(dx / r.r, dy / (dy > 0 ? r.rb : r.r)) < 1) ?? t.rings.at(-1)!).id;
   }
   const outer = t.hexagons[0];
   if (!outer) return undefined;

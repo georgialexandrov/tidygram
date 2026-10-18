@@ -47,6 +47,28 @@ export function mmdText(text: string): string {
     .trim();
 }
 
+/**
+ * A flowchart node label whose last `<br>` lines are `<small>…</small>`:
+ * extra lines under the name (our conversion folds C4 descriptions in that
+ * way, and Mermaid draws them smaller). A first small line in brackets is
+ * the C4 technology.
+ */
+export function mmdLabelParts(text: string): { label: string; description?: string[]; technology?: string } {
+  let t = text.trim();
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) t = t.slice(1, -1).trim();
+  const parts = t.split(/<br\s*\/?>/i);
+  const under: string[] = [];
+  while (parts.length > 1 && /^\s*<small>(?:(?!<\/?small>)[\s\S])*<\/small>\s*$/i.test(parts[parts.length - 1]!)) under.unshift(mmdText(parts.pop()!));
+  const out: { label: string; description?: string[]; technology?: string } = { label: mmdText(parts.join('<br>')) };
+  const tech = /^\[(.*)\]$/.exec(under[0] ?? '');
+  if (tech) {
+    out.technology = tech[1]!;
+    under.shift();
+  }
+  if (under.length) out.description = under;
+  return out;
+}
+
 const ENTITIES: Record<string, string> = { quot: '"', amp: '&', lt: '<', gt: '>', nbsp: ' ', apos: "'", semi: ';', colon: ':', hash: '#' };
 
 export interface EdgeStyle {

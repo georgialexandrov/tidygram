@@ -98,15 +98,18 @@ function flowchartToMermaid(diagram: Diagram, layout: LayoutFile): ConvertResult
       losses.add(`${n.kind} drawn as ${kind}`);
     }
     if (n.stereotype && n.stereotype !== 'boxless') losses.add('stereotype');
-    if (n.description?.length || n.compartments?.length) losses.add('description or member lines');
+    if (n.compartments?.length) losses.add('member lines');
     if (n.double && kind !== 'attribute' && kind !== 'rectangle') losses.add('double outline');
     const shape = FLOW_SHAPES[kind]!;
     const id = idOf(n.id);
+    // C4 technology and description lines go under the name in <small>, which Mermaid draws smaller and our reader takes apart again.
+    const under = [...(n.technology ? [`[${n.technology}]`] : []), ...(n.description ?? []).filter((l) => l.trim())];
+    const label = `"${[mmdLabel(n.label), ...under.map((l) => `<small>${mmdLabel(l)}</small>`)].join('<br>')}"`;
     let text: string;
-    if (typeof shape === 'string') text = `${id}@{ shape: ${shape}, label: ${quotedLabel(n.label)} }`;
+    if (typeof shape === 'string') text = `${id}@{ shape: ${shape}, label: ${label} }`;
     else {
       const [open, close] = n.double ? (kind === 'attribute' ? ['(((', ')))'] : kind === 'rectangle' ? ['[[', ']]'] : shape) : shape;
-      text = `${id}${open}${quotedLabel(n.label)}${close}`;
+      text = `${id}${open}${label}${close}`;
     }
     out.push(`${indent}${text}`, ['node', n.id]);
   };

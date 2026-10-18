@@ -170,6 +170,9 @@ export interface DEdge {
   reversed?: boolean;
   /** Bend points the source draws (draw.io waypoints), absolute; become `via` when the layout comes from the file. */
   sourceVia?: [number, number][];
+  /** Where the source attaches the ends (draw.io `exitX/exitY`, `entryX/entryY`: fractions of the box); become `from`/`to` like `sourceVia`. */
+  sourceFrom?: [number, number];
+  sourceTo?: [number, number];
   line: number;
 }
 

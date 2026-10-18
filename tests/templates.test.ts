@@ -229,6 +229,20 @@ describe('dependency rules', () => {
     expect(findViolations(d, t).map((v) => v.message)).toEqual(['REST Controller reaches Order Service without a port', 'Order depends on the adapter Postgres Order Repository']);
   });
 
+  it('hexagonal: each side uses its own ports; driving adapters may not call driven ones', () => {
+    const d = HEX();
+    const t = applyTemplate(d, emptyLayout(), 'hexagonal').template!;
+    const dep = (from: string, to: string, line: number) => d.edges.push({ id: `${from}-->${to}`, from, to, kind: 'dependency', dashed: false, head: 'arrow', tail: 'none', hidden: false, line });
+    dep('RestController', 'PaymentPort', 90);
+    dep('PgRepo', 'PlaceOrder', 91);
+    dep('AdminCli', 'PgRepo', 92);
+    expect(findViolations(d, t).map((v) => v.message)).toEqual([
+      'REST Controller uses the outbound port PaymentGateway: a driving adapter calls in through an inbound port',
+      "Postgres Order Repository uses the inbound port PlaceOrderUseCase: a driven adapter is called by the core, it doesn't call in",
+      'Admin CLI uses the driven adapter Postgres Order Repository directly, bypassing the core',
+    ]);
+  });
+
   it('clean: lines pointing outward, adapters may use their drivers unless strict', () => {
     const d = CLEAN();
     const t = applyTemplate(d, emptyLayout(), 'clean').template!;

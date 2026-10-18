@@ -1,7 +1,7 @@
 import type { DContainer, DNode, Diagram, DiagramFamily, NodeKind, ParseWarning, ArrowHead } from './types.ts';
 import type { ParseResult } from './parse.ts';
 import type { Line } from './puml-util.ts';
-import { edgeBuilder, mermaidLines, mmdText, splitStatements, type EdgeStyle } from './mermaid-util.ts';
+import { edgeBuilder, mermaidLines, mmdLabelParts, mmdText, splitStatements, type EdgeStyle } from './mermaid-util.ts';
 import { parseMermaidSequence } from './mermaid-sequence.ts';
 import { parseMermaidClass, parseMermaidEr, parseMermaidState } from './mermaid-class.ts';
 import { parseMermaidGantt } from './mermaid-gantt.ts';
@@ -137,7 +137,7 @@ const NAMED_SHAPES: Record<string, ShapeSpec['kind']> = {
 
 interface NodeRef {
   id: string;
-  shape?: { kind: NodeKind; label: string; double?: boolean };
+  shape?: { kind: NodeKind; label: string; double?: boolean; description?: string[]; technology?: string };
 }
 
 interface Link {
@@ -179,7 +179,7 @@ function scanStatement(s: string): { groups: NodeRef[][]; links: Link[] } | unde
       pos = close + 1;
       const shape = /\bshape\s*:\s*([\w-]+)/.exec(body)?.[1];
       const label = /\blabel\s*:\s*("(?:[^"\\]|\\.)*"|[^,}]+)/.exec(body)?.[1];
-      if (shape || label) ref.shape = { kind: (shape && NAMED_SHAPES[shape]) || 'rectangle', label: mmdText(label ?? ref.id), double: shape === 'dbl-circ' || shape === 'double-circle' || shape === 'subroutine' || shape === 'subproc' || undefined };
+      if (shape || label) ref.shape = { kind: (shape && NAMED_SHAPES[shape]) || 'rectangle', ...mmdLabelParts(label ?? ref.id), double: shape === 'dbl-circ' || shape === 'double-circle' || shape === 'subroutine' || shape === 'subproc' || undefined };
     } else {
       for (const spec of SHAPES) {
         if (!s.startsWith(spec.open, pos)) continue;
@@ -201,7 +201,7 @@ function scanStatement(s: string): { groups: NodeRef[][]; links: Link[] } | unde
           }
         }
         if (end === -1) continue;
-        ref.shape = { kind: spec.kind, label: mmdText(s.slice(pos + spec.open.length, end)), double: spec.double };
+        ref.shape = { kind: spec.kind, ...mmdLabelParts(s.slice(pos + spec.open.length, end)), double: spec.double };
         pos = end + closer.length;
         break;
       }
@@ -317,6 +317,10 @@ function parseFlowchart(header: Line, lines: Line[]): ParseResult {
           Object.assign(node, { kind: ref.shape.kind, label: ref.shape.label, line: no });
           if (ref.shape.double) node.double = true;
           else delete node.double;
+          if (ref.shape.description) node.description = ref.shape.description;
+          else delete node.description;
+          if (ref.shape.technology !== undefined) node.technology = ref.shape.technology;
+          else delete node.technology;
           bare.delete(ref.id);
         }
         // A node belongs to the subgraph it is mentioned in; the first one wins.

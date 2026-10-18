@@ -1,4 +1,4 @@
-import type { LayoutFile, Point } from '../layout/layout-file.ts';
+import type { EdgeLayout, EndAttach, LayoutFile, Point } from '../layout/layout-file.ts';
 import type { Diagram } from '../model/types.ts';
 import { layoutPathFor } from '../paths.ts';
 import { pathLength } from '../scene/geometry.ts';
@@ -55,17 +55,22 @@ export function setPinned(layout: LayoutFile, ids: Iterable<string>, pinned: boo
   return { ...layout, nodes };
 }
 
-function updateEdge(layout: LayoutFile, id: string, via: Point[] | undefined, label?: Point | null): LayoutFile {
+function updateEdge(layout: LayoutFile, id: string, via: Point[] | undefined, label?: Point | null, ends?: Partial<Record<'from' | 'to', EndAttach | null>>): LayoutFile {
   const current = layout.edges[id] ?? {};
-  const next = { ...current };
+  const next: EdgeLayout = { ...current };
   if (via !== undefined) {
     if (via.length) next.via = via;
     else delete next.via;
   }
   if (label === null) delete next.label;
   else if (label) next.label = label;
+  for (const key of ['from', 'to'] as const) {
+    const v = ends?.[key];
+    if (v === null) delete next[key];
+    else if (v) next[key] = v;
+  }
   const edges = { ...layout.edges };
-  if (next.via || next.label) edges[id] = next;
+  if (next.via || next.label || next.from || next.to) edges[id] = next;
   else delete edges[id];
   return { ...layout, edges };
 }
@@ -102,8 +107,19 @@ export function removeVia(layout: LayoutFile, id: string, index: number): Layout
   return updateEdge(layout, id, via);
 }
 
+/** Straighten: the line goes back to automatic routing, bends, label offset and chosen ends all dropped. */
 export function clearVia(layout: LayoutFile, id: string): LayoutFile {
-  return updateEdge(layout, id, [], null);
+  return updateEdge(layout, id, [], null, { from: null, to: null });
+}
+
+/** Where one end of a line attaches (dragging an end handle). */
+export function setEnd(layout: LayoutFile, id: string, end: 'from' | 'to', at: EndAttach): LayoutFile {
+  return updateEdge(layout, id, undefined, undefined, { [end]: at });
+}
+
+/** Back to the automatic attachment at one end (double-click on the end handle). */
+export function clearEnd(layout: LayoutFile, id: string, end: 'from' | 'to'): LayoutFile {
+  return updateEdge(layout, id, undefined, undefined, { [end]: null });
 }
 
 export function setLabelOffset(layout: LayoutFile, id: string, offset: Point): LayoutFile {

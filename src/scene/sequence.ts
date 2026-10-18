@@ -253,10 +253,12 @@ export function buildSequenceScene(model: SequenceModel, layout: LayoutFile): Se
         let x0: number;
         if (e.side === 'across') x0 = leftEdge + 10 * k;
         else if (e.side === 'over') {
-          const xs = e.over.map((id) => columns[id]!);
-          const span = Math.max(...xs) - Math.min(...xs);
-          const width = Math.max(w, span + 40 * k);
-          x0 = (Math.max(...xs) + Math.min(...xs)) / 2 - width / 2;
+          // Spans first to last named lifeline, padded past any activation bar on the outer ones.
+          const reach = (id: string) => (level(id) ? barW / 2 + (level(id) - 1) * 4 * k : 0);
+          const lo = Math.min(...e.over.map((id) => columns[id]! - reach(id)));
+          const hi = Math.max(...e.over.map((id) => columns[id]! + reach(id)));
+          const width = Math.max(w, hi - lo + 40 * k);
+          x0 = (lo + hi) / 2 - width / 2;
           notes.push({ box: { x: x0, y: y + 6 * k, w: width, h }, text, line: e.line });
           touch(x0, x0 + width);
           row(h + 14 * k);

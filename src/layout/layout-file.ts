@@ -14,6 +14,15 @@
  * Use `pageLayout` / `withPageLayout` to read and write one page; the rest of
  * the code only ever sees a single page's `LayoutFile`.
  *
+ * Edges: `via` (absolute checkpoints), `label` (offset), and `from` / `to`,
+ * hand-chosen attachment points (see `EndAttach`), relative to the element
+ * so they survive moves and resizes:
+ *
+ *     "edges": { "a-->b": { "from": { "x": 1, "y": 0.5, "side": "right" } } }
+ *
+ * Auto layout, Fit and templates keep them (`chosenEnds`); Reset and
+ * Straighten drop them. Sidecars without them are automatic, as before.
+ *
  * Architecture templates (`template`, see `TemplateSettings`): the source
  * can't say which layer an element belongs to and is never written, so the
  * template and the element → layer assignment live here, per page. While a
@@ -33,11 +42,34 @@ export interface NodeLayout {
   pinned?: boolean;
 }
 
+export type AttachSide = 'top' | 'right' | 'bottom' | 'left';
+
+export const ATTACH_SIDES: AttachSide[] = ['top', 'right', 'bottom', 'left'];
+
+/**
+ * Where a line attaches to one of its ends, chosen by hand (the editor's end
+ * handles, or a draw.io file's `exitX/exitY`/`entryX/entryY`). Relative to
+ * the element's drawn outline so it survives moves and resizes: `x`, `y` are
+ * fractions (0..1) of the outline's bounding box (draw.io's convention), and
+ * `side` is the direction the line leaves in, so it meets the outline
+ * square-on from there. On round shapes the point is projected onto the
+ * outline along `side`.
+ */
+export interface EndAttach {
+  x: number;
+  y: number;
+  side: AttachSide;
+}
+
 export interface EdgeLayout {
   /** Checkpoints the route must pass through, in order. */
   via?: Point[];
   /** Label offset from its automatic position. */
   label?: Point;
+  /** Hand-chosen attachment at the source end; absent = automatic. */
+  from?: EndAttach;
+  /** Hand-chosen attachment at the target end; absent = automatic. */
+  to?: EndAttach;
 }
 
 export interface ViewSettings {
@@ -143,6 +175,20 @@ export function withPageLayout(file: LayoutFile, page: string | undefined, layou
   return Object.keys(pages).length ? { ...top, pages } : top;
 }
 
+/**
+ * Hand-chosen line ends without the bends and label offsets: what Auto
+ * layout keeps. Ends are stored relative to their element, so they still
+ * mean the same after everything moves; bends are absolute and don't.
+ */
+export function chosenEnds(edges: LayoutFile['edges']): LayoutFile['edges'] {
+  const out: LayoutFile['edges'] = {};
+  for (const [id, e] of Object.entries(edges)) {
+    if (!e.from && !e.to) continue;
+    out[id] = { ...(e.from ? { from: e.from } : {}), ...(e.to ? { to: e.to } : {}) };
+  }
+  return out;
+}
+
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 const point = (v: unknown): Point | undefined => {
   if (!Array.isArray(v) || v.length !== 2) return undefined;
@@ -191,9 +237,32 @@ function readEdges(raw: unknown): Record<string, EdgeLayout> {
     }
     const label = point(value?.label);
     if (label) entry.label = label;
-    if (entry.via || entry.label) edges[id] = entry;
+    const from = readAttach(value?.from);
+    if (from) entry.from = from;
+    const to = readAttach(value?.to);
+    if (to) entry.to = to;
+    if (entry.via || entry.label || entry.from || entry.to) edges[id] = entry;
   }
   return edges;
+}
+
+/** The side a fraction point lies on: the nearest edge of the unit box (corners: the first of top/bottom, then left/right). */
+export function sideOfFraction(x: number, y: number): AttachSide {
+  const d: [AttachSide, number][] = [['top', y], ['bottom', 1 - y], ['left', x], ['right', 1 - x]];
+  return d.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+}
+
+/** Tolerant: fractions are clamped to 0..1, a missing or unknown side is taken from the point. */
+export function readAttach(raw: unknown): EndAttach | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const x = num(o.x);
+  const y = num(o.y);
+  if (x === undefined || y === undefined) return undefined;
+  const cx = Math.min(1, Math.max(0, x));
+  const cy = Math.min(1, Math.max(0, y));
+  const side = ATTACH_SIDES.includes(o.side as AttachSide) ? (o.side as AttachSide) : sideOfFraction(cx, cy);
+  return { x: cx, y: cy, side };
 }
 
 const stringMap = (raw: unknown): Record<string, string> =>
@@ -246,6 +315,8 @@ function readPage(raw: { nodes?: unknown; edges?: unknown; view?: Record<string,
 }
 
 const r = (v: number) => Math.round(v);
+/** Attachment fractions: three decimals is a tenth of a pixel on a 100 px box. */
+const frac = (v: number) => Math.round(v * 1000) / 1000;
 const sortedKeys = (o: object) => Object.keys(o).sort((a, b) => a.localeCompare(b));
 
 /** One entry per line, sorted keys, integer coordinates: small, stable diffs. Other pages follow, indented one level. */
@@ -272,6 +343,10 @@ function edgeLines(edges: Record<string, EdgeLayout>, pad: string): string[] {
     const parts: string[] = [];
     if (e.via?.length) parts.push(`"via": [${e.via.map(([x, y]) => `[${r(x)}, ${r(y)}]`).join(', ')}]`);
     if (e.label) parts.push(`"label": [${r(e.label[0])}, ${r(e.label[1])}]`);
+    for (const end of ['from', 'to'] as const) {
+      const a = e[end];
+      if (a) parts.push(`"${end}": { "x": ${frac(a.x)}, "y": ${frac(a.y)}, "side": "${a.side}" }`);
+    }
     return parts.length ? [`${pad}  ${JSON.stringify(id)}: { ${parts.join(', ')} }`] : [];
   });
 }

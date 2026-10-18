@@ -1,7 +1,7 @@
 // End-to-end smoke test: drives the running editor (pnpm dev) in headless
 // Chrome over the DevTools protocol, drags a node and pulls a line, and checks
 // what was written to layout.json; then multi-select (shift-click, group drag,
-// one undo), marquee, and layout export; then an architecture template on
+// one undo), marquee, line ends (end handle drag with snapping, one undo, double-click reset), and layout export; then an architecture template on
 // fixtures/architecture/layered-web-shop.puml (apply from the menu, drag into another band, undo,
 // findings panel, turn off and back on with undo). Usage: node scripts/smoke.mjs [screenshot.png]
 // Restores fixtures/food-delivery.layout.json and the architecture sidecar afterwards.
@@ -111,6 +111,71 @@ try {
   await undoKey();
   await sleep(600);
   const afterUndo = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+
+  // 3a. Line end: select the line, hover its target handle (outline + snap points show), drag it to a
+  //     snap point far from where it is, without Alt (snapping on); one undo removes it; double-click resets.
+  const ID = 'UC_Pay-->PSP';
+  const handle = `[data-end-handles="${ID}"] [data-end="to"]`;
+  // Zoom in (the fixture fits at ~13%, where snap points are a pixel apart); the same wheel back restores the view exactly.
+  const lineEndOf = (end) => evaluate(`(() => {
+    const p = document.querySelector('[data-edge="${ID}"] path');
+    const pt = p.getPointAtLength(${end} === 1 ? p.getTotalLength() : p.getTotalLength() / 2);
+    const m = p.getScreenCTM(); return [pt.x * m.a + m.e, pt.y * m.d + m.f];
+  })()`);
+  const zoomAt = await lineEndOf(1);
+  const wheel = (deltaY) => send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: zoomAt[0], y: zoomAt[1], deltaX: 0, deltaY, modifiers: 2 });
+  await wheel(-220);
+  await sleep(300);
+  const lineMid = await lineEndOf(0.5);
+  await click(lineMid, 0);
+  await sleep(200);
+  const handleShown = !!(await centreOf(handle));
+  const h0 = await centreOf(handle);
+  await mouse('mouseMoved', h0[0], h0[1], 0, 0);
+  await sleep(150);
+  const hintOnHover = await evaluate(`document.querySelectorAll('.end-hint path').length`);
+  const marks = await evaluate(`[...document.querySelectorAll('.end-hint > path')].map((m) => { const r = m.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })`);
+  const goal = marks.reduce((best, m) => (Math.hypot(m[0] - h0[0], m[1] - h0[1]) > Math.hypot(best[0] - h0[0], best[1] - h0[1]) ? m : best), h0);
+  await mouse('mousePressed', h0[0], h0[1], 1, 0);
+  for (let i = 1; i <= 12; i++) await mouse('mouseMoved', h0[0] + ((goal[0] - h0[0]) * i) / 12 + 3, h0[1] + ((goal[1] - h0[1]) * i) / 12 + 2, 1, 0);
+  const hintWhileDragging = await evaluate(`!!document.querySelector('.end-hint circle')`);
+  if (process.argv[2]) writeFileSync(process.argv[2].replace(/\.png$/, '-line-end.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  await mouse('mouseReleased', goal[0] + 3, goal[1] + 2, 0, 0);
+  await sleep(600);
+  const afterEnd = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  const endNow = await centreOf(handle);
+  const endFixed = await evaluate(`document.querySelector(${JSON.stringify(handle)})?.getAttribute('fill') !== '#FFFFFF'`);
+  await undoKey();
+  await sleep(600);
+  const afterEndUndo = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  await click(lineMid, 0);
+  await sleep(150);
+  const h1 = await centreOf(handle);
+  await mouse('mousePressed', h1[0], h1[1], 1, 0);
+  for (let i = 1; i <= 6; i++) await mouse('mouseMoved', h1[0] + ((goal[0] - h1[0]) * i) / 6, h1[1] + ((goal[1] - h1[1]) * i) / 6, 1, 0);
+  await mouse('mouseReleased', goal[0], goal[1], 0, 0);
+  await sleep(500);
+  const h2 = await centreOf(handle);
+  if (process.env.SMOKE_DEBUG) console.log('end phase', { h0, goal, h1, h2, afterEnd: afterEnd.edges[ID], undo: afterEndUndo.edges[ID] });
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: h2[0], y: h2[1], button: 'left', buttons: 1, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: h2[0], y: h2[1], button: 'left', buttons: 0, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: h2[0], y: h2[1], button: 'left', buttons: 1, clickCount: 2 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: h2[0], y: h2[1], button: 'left', buttons: 0, clickCount: 2 });
+  await sleep(600);
+  const afterReset = JSON.parse(readFileSync(LAYOUT, 'utf8'));
+  await wheel(220);
+  await sleep(300);
+  const endResults = {
+    handleShown,
+    hintOnHover,
+    hintWhileDragging,
+    stored: afterEnd.edges[ID]?.to ?? null,
+    landedOnSnap: endNow && Math.hypot(endNow[0] - goal[0], endNow[1] - goal[1]) < 2.5,
+    endFixed,
+    undone: !afterEndUndo.edges[ID]?.to,
+    reset: !afterReset.edges[ID]?.to,
+  };
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
 
   // 3b. Multi-select: click Admin, shift-click Courier, drag Admin; both move, one undo restores both.
   const groupBefore = JSON.parse(readFileSync(LAYOUT, 'utf8'));
@@ -292,6 +357,7 @@ try {
     groupUndone: { Admin: groupUndone.nodes.Admin, Courier: groupUndone.nodes.Courier },
     marquee: { startsEmpty, selected: marqueeSel },
     layoutExport: { menuOpen, name: exported?.name, matchesDisk: exported?.text === onDisk, copyMatches: copied === onDisk },
+    lineEnd: endResults,
     template: templateResults,
     browserErrors: logs,
   };
@@ -328,6 +394,14 @@ try {
     exported?.name === 'food-delivery.layout.json' &&
     exported.text === onDisk &&
     copied === onDisk &&
+    endResults.handleShown &&
+    endResults.hintOnHover > 4 &&
+    endResults.hintWhileDragging &&
+    !!endResults.stored?.side &&
+    endResults.landedOnSnap &&
+    endResults.endFixed &&
+    endResults.undone &&
+    endResults.reset &&
     templateResults.applied === 'layered' &&
     templateResults.backdrop &&
     templateResults.panelViolations === '1' &&
