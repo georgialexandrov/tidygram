@@ -357,11 +357,11 @@ function evenly(order: SideMember[], lo: number, hi: number, pitch: number): num
  * keep the router's choice of side, which keeps its bends. `lines` are the drawn routes. Returns
  * the lines whose ports changed (to be routed again).
  */
-export function untangle(lines: { e: DEdge; points: Point[] }[], result: Map<string, EdgePorts>, ctx: PortContext): Set<string> {
+export function untangle(lines: { e: DEdge; points: Point[]; keep?: boolean }[], result: Map<string, EdgePorts>, ctx: PortContext): Set<string> {
   const k = ctx.scale ?? 1;
   const groups = new Map<string, { n: SceneNode; side: Side; members: SideMember[] }>();
-  for (const { e, points } of lines) {
-    // Straight lines (and every other port) take part as taken spots.
+  for (const { e, points, keep } of lines) {
+    // Straight lines (and every other port, and lines marked `keep`) take part as taken spots.
     if (e.from === e.to || points.length < 2) continue;
     for (const end of ['from', 'to'] as const) {
       const n = ctx.nodes.get(end === 'from' ? e.from : e.to);
@@ -381,7 +381,7 @@ export function untangle(lines: { e: DEdge; points: Point[] }[], result: Map<str
       const turn = pts.length >= 3 ? pts[pts.length - 3]! : pts[0]!;
       const key = along(side, turn[0] - p[0], turn[1] - p[1]);
       // A port, or a line that is one straight stretch, stays where it is.
-      const m: SideMember = result.get(e.id)?.[end] || (points.length === 2 && !isIcon(n)) ? { e, end, key, at } : { e, end, key, want: at };
+      const m: SideMember = keep || result.get(e.id)?.[end] || (points.length === 2 && !isIcon(n)) ? { e, end, key, at } : { e, end, key, want: at };
       const id = `${n.node.id}:${side}`;
       const g = groups.get(id) ?? { n, side, members: [] };
       g.members.push(m);
@@ -398,6 +398,37 @@ export function untangle(lines: { e: DEdge; points: Point[] }[], result: Map<str
     for (const id of placeSide(n, side, members, result, ctx)) changed.add(id);
   }
   return changed;
+}
+
+/**
+ * A drawn line with one end moved to `outline` without routing it again:
+ * the last stretch shifts sideways to the new spot (the stretch before it
+ * runs along the side, so it just gets longer or shorter); a line that is
+ * one straight stretch takes a jog halfway. For live spreading while
+ * dragging; the full build on release routes it properly.
+ */
+export function moveEnd(points: Point[], end: 'from' | 'to', outline: Point): Point[] {
+  const pts = end === 'to' ? [...points] : [...points].reverse();
+  const n = pts.length;
+  const last = pts[n - 1]!;
+  const prev = pts[n - 2]!;
+  const axis = Math.abs(prev[0] - last[0]) < 0.5 ? 0 : 1; // the coordinate that moves along the side
+  if (n >= 3) {
+    const q: Point = [...prev];
+    q[axis] = outline[axis]!;
+    pts[n - 2] = q;
+    pts[n - 1] = outline;
+  } else {
+    const mid = (prev[1 - axis]! + last[1 - axis]!) / 2;
+    const a: Point = [0, 0];
+    const b: Point = [0, 0];
+    a[axis] = prev[axis]!;
+    a[1 - axis] = mid;
+    b[axis] = outline[axis]!;
+    b[1 - axis] = mid;
+    pts.splice(1, 1, a, b, outline);
+  }
+  return end === 'to' ? pts : pts.reverse();
 }
 
 /**

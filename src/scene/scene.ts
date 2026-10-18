@@ -4,7 +4,7 @@ import type { Avoid } from './avoid.ts';
 import { containerBoxes, doorFor, facingSide, nodeBox, overlaps, titleBox, wallsFor, type Box, type Door, type Positions, type Side } from './containers.ts';
 import { clipEnd, clipStart, pathLength, pointAt, simplify, type AnchorShape } from './geometry.ts';
 import { borderCrossings, overlapArea, pathHitsBox } from './quality.ts';
-import { planPorts, settleEnd, slideOnNode, untangle, type EdgePorts, type Port } from './ports.ts';
+import { moveEnd, planPorts, settleEnd, slideOnNode, untangle, type EdgePorts, type Port } from './ports.ts';
 import { attachOutline, outward } from './attach.ts';
 import { placeEndLabel, placeMidLabel, type LabelObstacles } from './labels.ts';
 import { containerPad, nodeShape, orientBars, type NodeShape } from './shapes.ts';
@@ -434,10 +434,27 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   };
   let routes = routeLines(routed);
   // Lines that ran into one spot get spots of their own, and everything is routed again so nudging sees the
-  // new ends. Full builds only: while dragging, the dragged lines keep the plain route until release. (Done
-  // live, it needs a second routing of the dragged lines on nearly every frame: +1.3 ms median per drag
-  // frame on food-delivery, 8.8 -> 10.1 ms, measured 2026-10-18; reusing last frame's spots instead can
-  // lock a line to a stale side for the rest of the drag.)
+  // new ends. While dragging, a second routing costs too much (+1.3 ms median per drag frame on
+  // food-delivery, 8.8 -> 10.1 ms, measured 2026-10-18), so the dragged lines are spread among the kept
+  // lines' ends on their nodes and only their end stretches move (`moveEnd`); release routes them properly.
+  let live: Map<string, Point[]> | undefined;
+  if (reused.size && routed.length) {
+    live = new Map(routed.map((e) => [e.id, drawn(e, routes)]));
+    const touched = new Set(routed.flatMap((e) => [e.from, e.to]));
+    const lines = [
+      ...routed.map((e) => ({ e, points: live!.get(e.id)! })),
+      ...[...reused.values()].filter((s) => touched.has(s.edge.from) || touched.has(s.edge.to)).map((s) => ({ e: s.edge, points: s.points, keep: true })),
+    ];
+    const spread = new Map(ports);
+    for (const id of untangle(lines, spread, { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, scale: theme.scale })) {
+      const before = ports.get(id);
+      const after = spread.get(id);
+      let points = live.get(id);
+      if (!points || points.length < 2 || !after) continue;
+      for (const end of ['from', 'to'] as const) if (after[end] && after[end] !== before?.[end]) points = moveEnd(points, end, after[end]!.outline);
+      live.set(id, simplify(points));
+    }
+  }
   if (!reused.size && routed.length > 1) {
     const ctx = { nodes: byId, containers: fences, within, buffer: ROUTING.shapeBuffer, scale: theme.scale };
     // Twice at most: the second routing can bring two other ends together.
@@ -451,7 +468,7 @@ export function buildScene(diagram: Diagram, layout: LayoutFile, avoid: Avoid, o
   const edges: SceneEdge[] = visible.map((e) => {
     const kept = reused.get(e.id);
     if (kept) return kept;
-    const points = drawn(e, routes);
+    const points = live?.get(e.id) ?? drawn(e, routes);
     return {
       edge: e,
       kind: e.kind,
